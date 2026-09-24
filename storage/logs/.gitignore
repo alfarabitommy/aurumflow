@@ -1,0 +1,4 @@
+# Log aplikasi AurumFlow tidak di-commit.
+# Struktur folder TETAP di-commit lewat file penanda ini.
+*
+!.gitignore

@@ -1,0 +1,6 @@
+# Isi folder ini diabaikan oleh git.
+# Lihat juga: .htaccess di folder yang sama (folder ini tidak boleh
+# mengeksekusi skrip apa pun).
+*
+!.gitignore
+!.htaccess

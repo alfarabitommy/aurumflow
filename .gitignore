@@ -1,0 +1,35 @@
+# ============================================================
+# AurumFlow — daftar file yang TIDAK boleh masuk version control
+# ============================================================
+
+# --- Konfigurasi & secret ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Log & state runtime ---
+/storage/logs/*.log
+!/storage/logs/.gitignore
+*.log
+
+# --- Upload pengguna (isi tidak pernah di-commit) ---
+/public/uploads/*
+!/public/uploads/.gitignore
+!/public/uploads/.htaccess
+
+# --- Marker instalasi ---
+/storage/installed.lock
+
+# --- Cache / artefak QC ---
+/tests/.tmp/
+*.tmp
+
+# --- Editor & OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~

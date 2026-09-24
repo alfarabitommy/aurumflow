@@ -1,0 +1,37 @@
+# ============================================================
+# AurumFlow — public/uploads/.htaccess
+# ============================================================
+# Mitigasi risiko R-10: folder upload TIDAK boleh mengeksekusi skrip apa
+# pun. Hanya file statis yang boleh disajikan dari sini.
+#
+# Isi folder ini juga diabaikan git (lihat public/uploads/.gitignore).
+
+# Matikan mesin PHP (mod_php / php-fpm lama).
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php5.c>
+    php_flag engine off
+</IfModule>
+
+# Lepas handler skrip dari seluruh ekstensi berbahaya.
+<FilesMatch "\.(php|php[0-9]?|phtml|phar|pht|shtml|pl|py|cgi|asp|aspx|jsp|sh|htaccess)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Paksa tipe konten generik agar file tidak "ditebak" sebagai HTML/JS.
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Content-Disposition "attachment"
+</IfModule>
+
+Options -Indexes -ExecCGI

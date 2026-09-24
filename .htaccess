@@ -1,0 +1,33 @@
+# ============================================================
+# AurumFlow — .htaccess tingkat proyek (defense in depth)
+# ============================================================
+# File ini BARU berdampak bila document root hosting terpaksa diarahkan
+# ke root proyek (bukan ke public/). Bila document root sudah benar
+# mengarah ke public/, file ini hanya lapisan pengaman tambahan.
+#
+# Mitigasi risiko R-1 pada dokumen rencana.
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Tolak semua akses ke direktori backend dan file sensitif.
+    RewriteRule ^(app|database|storage|tests)(/|$) - [F,L]
+    RewriteRule (^|/)\.(?!well-known) - [F,L]
+
+    # Arahkan root ke folder public/ bila memungkinkan.
+    RewriteRule ^$ public/ [L]
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>
+
+<FilesMatch "^(\.env.*|.*\.(sql|log|md|lock|ini|dist|example))$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
