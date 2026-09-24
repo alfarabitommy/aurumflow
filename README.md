@@ -8,14 +8,15 @@ beserta dokumen spesifikasi otoritatifnya.
 
 | Dokumen | Peran |
 |---|---|
+| [`plan/Plan_Fase_1_AurumFlow.md`](plan/Plan_Fase_1_AurumFlow.md) | Rencana eksekusi Fase 1 + addendum rekonsiliasi |
+| [`plan/Summary_Fase_1_AurumFlow.md`](plan/Summary_Fase_1_AurumFlow.md) | **Laporan eksekusi**: apa yang dibangun, diuji, dan menyimpang |
 | `docs/AurumFlow Entity Relationship Diagram.md` | **Sumber kebenaran skema database** (ERD §3.1 tipe data, §4 DDL + seed) |
 | `docs/AurumFlow System Architecture Document.md` | Struktur direktori, tech stack, aturan keamanan |
 | `docs/AurumFlow Roadmap and QC Documents.md` | Isi per fase + protokol QC |
 | `docs/AurumFlow Product Requirement Document v3.0.md` | Aturan bisnis & hak akses |
 | `docs/AurumFlow UI UX Documents.md` | Acuan UI Fase 2+ |
-| `Plan_Fase_1_AurumFlow.md` | Rencana eksekusi Fase 1 + addendum rekonsiliasi |
 
-> **Status: Fase 1 selesai dan terverifikasi** — 7 suite QC, 185 assertion, 0 gagal.
+> **Status: Fase 1 selesai dan terverifikasi** — 7 suite QC, 191 assertion, 0 gagal.
 > Belum ada modul bisnis; meja kasir, settlement, dan Waterfall Engine masuk
 > Fase 2–4.
 
@@ -55,7 +56,9 @@ aurumflow/
 ├── .env.example              # template konfigurasi (di-commit)
 ├── .env                      # konfigurasi nyata (TIDAK di-commit)
 ├── .htaccess                 # deny app/ database/ storage/ tests/ (defense in depth)
-├── Plan_Fase_1_AurumFlow.md
+├── plan/                     # dokumen perencanaan & laporan eksekusi
+│   ├── Plan_Fase_1_AurumFlow.md
+│   └── Summary_Fase_1_AurumFlow.md
 ├── docs/                     # 5 dokumen spesifikasi otoritatif
 ├── app/                      # KODE INTI — di luar document root
 │   ├── Config/
@@ -191,13 +194,13 @@ php tests/qc_routing.php
 | Suite | Assertion | Cakupan |
 |---|---:|---|
 | `qc_pdo` | 20 | Koneksi, charset, timezone, exception, singleton, presisi DECIMAL, transaksi commit/rollback |
-| `qc_formatter` | 37 | Format Rupiah & gramatur (kesamaan string persis), round-trip, locale |
+| `qc_formatter` | 43 | Format Rupiah & gramatur (kesamaan string persis), round-trip, locale, tanggal operasi |
 | `qc_security` | 32 | XSS escaping, password hashing, CSRF, session, `uuidV4()`, sumber acak |
 | `qc_seed` | 46 | Idempotensi DDL/seed, 9 tabel ERD, konvensi DECIMAL, FK, ENUM, guard installer |
 | `qc_roadmap_protocol_1` | 6 | **Protokol QC Manual 1** dari dokumen Roadmap (5 baris, 1:1) |
 | `qc_sql_injection` | 15 | 8 payload injeksi (model + HTTP), integritas data, pemindaian statis |
 | `qc_routing` | 29 | Routing, CSRF, login/logout, cookie, header, proteksi file sensitif |
-| **Total** | **185** | **0 FAIL** |
+| **Total** | **191** | **0 FAIL** |
 
 Exit code `0` = seluruh assertion lulus, `1` = ada yang gagal. `run_qc.sh`
 menulis keluaran lengkap ke `storage/logs/qc-fase1.log`.

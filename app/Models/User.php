@@ -19,9 +19,6 @@ use AurumFlow\Helpers\Security;
  */
 final class User
 {
-    /** Panjang kolom `signed_user_agent` bersifat TEXT — dibatasi agar rapi. */
-    private const USER_AGENT_MAX_LENGTH = 255;
-
     private function __construct()
     {
     }
@@ -49,18 +46,6 @@ final class User
         }
 
         return Database::fetchOne($sql . ' LIMIT 1', ['phone_number' => $phoneNumber]);
-    }
-
-    /**
-     * @param array<string, mixed> $user
-     */
-    public static function findById(string $id): ?array
-    {
-        return Database::fetchOne(
-            'SELECT `id`, `full_name`, `phone_number`, `role`, `is_active`, `onboarding_signed_at` '
-            . 'FROM `users` WHERE `id` = :id LIMIT 1',
-            ['id' => $id]
-        );
     }
 
     /**
@@ -148,26 +133,5 @@ final class User
         }
 
         return $ip;
-    }
-
-    /**
-     * User-Agent klien untuk kolom audit `signed_user_agent`.
-     */
-    public static function userAgent(): ?string
-    {
-        $agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-
-        if (!is_string($agent) || $agent === '') {
-            return null;
-        }
-
-        $agent = str_replace(["\r", "\n"], ' ', $agent);
-        $agent = strip_tags($agent);
-
-        if (strlen($agent) > self::USER_AGENT_MAX_LENGTH) {
-            $agent = substr($agent, 0, self::USER_AGENT_MAX_LENGTH);
-        }
-
-        return $agent;
     }
 }

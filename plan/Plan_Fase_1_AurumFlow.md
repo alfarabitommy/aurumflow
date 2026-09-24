@@ -88,7 +88,7 @@ aurumflow/
 ├── .env.example                        # template konfigurasi (di-commit)
 ├── .gitignore                          # .env, storage/logs/*, public/uploads/*
 ├── .htaccess                           # (optional) defense in depth — deny app/, database/, storage/, tests/
-├── Plan_Fase_1_AurumFlow.md            # dokumen ini
+├── Plan_Fase_1_AurumFlow.md            # dokumen ini (lihat catatan pemindahan di §A.5)
 ├── README.md                           # cara install & menjalankan
 │
 ├── app/                                # ── BACKEND LOGIC (tidak terekspos web) ──
@@ -437,7 +437,7 @@ Scope awal menyebut `app/` berisi **Config, Controllers, Helpers, Views** dan `p
 1. `app.css` minimal (reset ringan, layout dasar, styling form login & tabel). Tanpa framework CSS.
 2. `app.js` minimal (konfirmasi submit form logout, guard double-submit). Vanilla JS, tanpa dependensi.
 3. `public/uploads/.gitignore` → `*` + `!.gitignore`.
-4. `.htaccess` root (hanya bila docroot tidak dapat diarahkan ke `public/`) → deny akses ke `app/`, `database/`, `storage/`, `tests/`, `Plan_Fase_1_AurumFlow.md`, `.env`.
+4. `.htaccess` root (hanya bila docroot tidak dapat diarahkan ke `public/`) → deny akses ke `app/`, `database/`, `storage/`, `tests/`, `plan/`, `docs/`, `.env`.
 5. `README.md` → prasyarat, langkah instalasi, cara menjalankan QC, dan **peringatan hapus `database/install.php`**.
 
 **Kriteria selesai:** mengakses `/../app/Config/Database.php` dan `/.env` via HTTP mengembalikan 403/404, bukan isi file.
@@ -717,7 +717,7 @@ public/index.php  (FRONT CONTROLLER)
 | 2 | `docs/AurumFlow System Architecture Document.md` | Struktur direktori, tech stack, aturan keamanan |
 | 3 | `docs/AurumFlow Roadmap and QC Documents.md` | Isi tiap fase + protokol QC |
 | 4 | `docs/AurumFlow Product Requirement Document v3.0.md` | Aturan bisnis & hak akses |
-| 5 | `Plan_Fase_1_AurumFlow.md` (dokumen ini) | Rencana eksekusi Fase 1 |
+| 5 | `plan/Plan_Fase_1_AurumFlow.md` (dokumen ini) | Rencana eksekusi Fase 1 |
 | 6 | `docs/AurumFlow UI UX Documents.md` | Acuan Fase 2+ (Tailwind/Alpine/PWA) |
 
 ## A.2 Pertentangan yang ditemukan dan koreksinya
@@ -749,7 +749,7 @@ dari kontrak data):
 3. `app/Models/` — pemisahan layer (User, SystemSetting).
 4. `app/routes.php` — route table sebagai data.
 5. `database/install.php` — instalasi pada hosting tanpa CLI (guard token).
-6. `tests/` — harness QC + 7 suite (185 assertion).
+6. `tests/` — harness QC + 7 suite (191 assertion).
 7. `storage/logs/` — log di luar docroot.
 
 ## A.4 Penyimpangan yang disengaja dari ERD (beserta alasan)
@@ -778,7 +778,9 @@ dari kontrak data):
 aurumflow/
 ├── .env / .env.example
 ├── .gitignore, .htaccess, README.md
-├── Plan_Fase_1_AurumFlow.md
+├── plan/                      # dokumen perencanaan & laporan eksekusi
+│   ├── Plan_Fase_1_AurumFlow.md
+│   └── Summary_Fase_1_AurumFlow.md
 ├── docs/                      # 5 dokumen otoritatif (ERD, SAD, PRD, Roadmap, UI/UX)
 ├── app/
 │   ├── Config/                # Env, App, Constants, Database, DatabaseException, bootstrap
@@ -793,18 +795,25 @@ aurumflow/
 └── tests/                     # bootstrap, server_router, 7× qc_*.php, run_qc.sh
 ```
 
+> **Catatan pemindahan dokumen.** Pohon §3.1 di atas masih menempatkan
+> `Plan_Fase_1_AurumFlow.md` di root proyek — itu kondisi saat rencana disusun.
+> Kedua dokumen perencanaan kini berada di `plan/` agar terpisah dari kode:
+> `plan/Plan_Fase_1_AurumFlow.md` dan `plan/Summary_Fase_1_AurumFlow.md`
+> (laporan eksekusi). `.htaccess` root juga diperbarui untuk menolak akses ke
+> `plan/` dan `docs/`.
+
 ## A.6 Hasil QC final
 
 | Suite | Assertion | Hasil |
 |---|---|---|
 | `qc_pdo` (termasuk transaksi commit/rollback) | 20 | PASS |
-| `qc_formatter` | 37 | PASS |
+| `qc_formatter` | 43 | PASS |
 | `qc_security` (termasuk `uuidV4()`) | 32 | PASS |
 | `qc_seed` (skema ERD + guard installer) | 46 | PASS |
 | `qc_roadmap_protocol_1` (Protokol QC Manual 1) | 6 | PASS |
 | `qc_sql_injection` | 15 | PASS |
 | `qc_routing` | 29 | PASS |
-| **Total** | **185** | **0 FAIL** |
+| **Total** | **191** | **0 FAIL** |
 
 Protokol QC Manual 1 dari dokumen Roadmap kini dijalankan otomatis dan
 keluarannya dapat disalin langsung ke tabel pada dokumen tersebut.

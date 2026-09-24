@@ -159,4 +159,27 @@ Qc::ok(
     implode("\n", $localeUsage)
 );
 
+// ---------------------------------------------------------------------------
+Qc::section('Format tanggal operasi (Formatter::tanggalId)');
+
+Qc::equals('3.11', 'tanggalId("2026-09-24") === "24/09/2026"', '24/09/2026', Formatter::tanggalId('2026-09-24'));
+Qc::equals(
+    '3.12',
+    'tanggalId() dengan waktu memakai format d/m/Y H:i',
+    '24/09/2026 15:30',
+    Formatter::tanggalId('2026-09-24 15:30:00', true)
+);
+Qc::equals('3.13', 'tanggalId() mengembalikan "-" untuk string kosong', '-', Formatter::tanggalId(''));
+Qc::equals('3.14', 'tanggalId() mengembalikan "-" untuk input tidak valid', '-', Formatter::tanggalId('bukan-tanggal'));
+
+// Tanggal hanya-tanggal tidak boleh bergeser karena konversi timezone.
+Qc::equals('3.15', 'Tanggal tidak bergeser oleh konversi timezone', '01/01/2026', Formatter::tanggalId('2026-01-01'));
+
+Qc::equals(
+    '3.16',
+    'tanggalId() memakai timezone aplikasi',
+    'Asia/Jakarta',
+    AurumFlow\Config\App::timezone()
+);
+
 Qc::finish('qc_formatter');

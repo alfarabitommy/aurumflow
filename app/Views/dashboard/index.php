@@ -53,6 +53,10 @@ $sampleLabels = [
             <dd><?= Security::e($activeUserCount) ?></dd>
         </div>
         <div class="facts__item">
+            <dt>Tanggal operasi</dt>
+            <dd><?= Security::e($tanggalOperasi ?? '-') ?></dd>
+        </div>
+        <div class="facts__item">
             <dt>Setting sistem</dt>
             <dd><?= Security::e(count($settings)) ?></dd>
         </div>

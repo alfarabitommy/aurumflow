@@ -66,6 +66,10 @@ final class DashboardController extends BaseController
 
             'activeUserCount' => User::countActive(),
 
+            // Tanggal operasi — konsep inti pada sistem bersettlement T+1.
+            // Sekaligus pemakai nyata Formatter::tanggalId().
+            'tanggalOperasi' => Formatter::tanggalId(date('Y-m-d')),
+
             'settings'       => SystemSetting::all(),
             'settingLabels'  => self::SETTING_LABELS,
 

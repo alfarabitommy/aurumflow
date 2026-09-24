@@ -13,7 +13,7 @@ Options -Indexes
     RewriteEngine On
 
     # Tolak semua akses ke direktori backend dan file sensitif.
-    RewriteRule ^(app|database|storage|tests)(/|$) - [F,L]
+    RewriteRule ^(app|database|storage|tests|plan|docs)(/|$) - [F,L]
     RewriteRule (^|/)\.(?!well-known) - [F,L]
 
     # Arahkan root ke folder public/ bila memungkinkan.
