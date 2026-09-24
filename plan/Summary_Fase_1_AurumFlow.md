@@ -252,6 +252,25 @@ Simbol yang hanya dipakai QC (`Security::isUuid()`, `Logger::currentFile()`,
 `Database::disconnect()`) **dipertahankan** karena merupakan API pendukung
 pengujian berbagi-pakai, bukan jalur mati.
 
+### 7.1 Cacat harness QC yang ditemukan setelah commit Fase 1
+
+Ditemukan saat menulis `AGENTS.md`: **PHP membuang environment variable
+bernilai string kosong** pada argumen env `proc_open()`. Akibatnya override
+`['INSTALL_TOKEN' => '']` yang dipakai QC 4.14 sampai ke proses anak dalam
+keadaan **tidak ada**, sehingga `Env::get()` jatuh kembali ke nilai di `.env`
+dan test itu **vakum** — ia hanya lulus selama `.env` kebetulan memuat token
+kosong. Begitu `.env` diisi token nyata, 4.14 langsung gagal.
+
+Perbaikan: `qc_run_php()` tidak lagi mengirim override lewat environment,
+melainkan sebagai JSON (`QC_ENV_OVERRIDES`) yang diterapkan dengan `putenv()`
+di dalam proses anak lewat stub `auto_prepend_file` (`tests/.tmp/`).
+
+Diverifikasi: dengan `INSTALL_TOKEN` **non-kosong** di `.env`, 4.14 kini tetap
+`[PASS]` — membuktikan cabang "token kosong" benar-benar diuji.
+
+Pelajaran yang dicatat di `AGENTS.md`: jangan memakai `proc_open()` dengan
+array env untuk override; selalu lewat `qc_run_php()`.
+
 ---
 
 ## 8. Status Gate Penerimaan (rencana §6.7)

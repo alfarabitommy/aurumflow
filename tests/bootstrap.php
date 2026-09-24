@@ -512,15 +512,41 @@ final class QcFixture
 // ---------------------------------------------------------------------------
 
 /**
- * Jalankan kembali file QC ini sebagai subprocess dengan environment yang
- * ditimpa. Dipakai untuk menguji jalur gagal (kredensial salah, token kosong).
+ * Jalankan `php <script>` sebagai subprocess dengan environment yang ditimpa.
  *
- * @param array<string, string> $env
+ * CATATAN PENTING soal cara override diterapkan:
+ * PHP tidak meneruskan environment variable yang bernilai string kosong lewat
+ * argumen env `proc_open()` — variabel tersebut sampai ke anak dalam keadaan
+ * TIDAK ADA, bukan bernilai "". Akibatnya override `['TOKEN' => '']` akan
+ * diam-diam jatuh kembali ke nilai di `.env`, dan test yang seharusnya menguji
+ * cabang "nilai kosong" malah menguji hal lain.
+ *
+ * Karena itu override TIDAK dikirim sebagai environment, melainkan sebagai
+ * JSON (`QC_ENV_OVERRIDES`, selalu tidak kosong sehingga aman) lalu diterapkan
+ * di dalam proses anak memakai `putenv()` lewat stub `auto_prepend_file`.
+ *
+ * @param array<string, string> $env nilai kosong diperlakukan sebagai "isi dengan string kosong"
+ * @param list<string>          $args
  * @return array{code: int, output: string}
  */
 function qc_run_php(string $script, array $env = [], array $args = []): array
 {
-    $command = array_merge([PHP_BINARY, $script], $args);
+    $command = [PHP_BINARY];
+    $childEnv = getenv();
+
+    if ($env !== []) {
+        $stub = qc_env_stub_path();
+
+        // Stub menerima override sebagai JSON. Variabel JSON selalu tidak
+        // kosong (minimal "{}"), jadi tidak terkena masalah yang dijelaskan
+        // pada docblock di atas.
+        $childEnv['QC_ENV_OVERRIDES'] = json_encode($env) ?: '{}';
+
+        $command[] = '-d';
+        $command[] = 'auto_prepend_file=' . $stub;
+    }
+
+    $command[] = $script;
 
     $descriptors = [
         0 => ['pipe', 'r'],
@@ -529,11 +555,11 @@ function qc_run_php(string $script, array $env = [], array $args = []): array
     ];
 
     $process = proc_open(
-        $command,
+        array_merge($command, $args),
         $descriptors,
         $pipes,
         BASE_PATH,
-        array_merge(getenv(), $env)
+        $childEnv
     );
 
     if (!is_resource($process)) {
@@ -549,6 +575,40 @@ function qc_run_php(string $script, array $env = [], array $args = []): array
     $code = proc_close($process);
 
     return ['code' => $code, 'output' => $stdout . $stderr];
+}
+
+/**
+ * Tulis (sekali) stub yang menerapkan override environment di proses anak.
+ *
+ * Stub ini hidup di tests/.tmp/ yang di-gitignore dan hanya dipakai QC;
+ * tidak pernah menyentuh kode produksi.
+ */
+function qc_env_stub_path(): string
+{
+    $directory = TEST_PATH . '/.tmp';
+
+    if (!is_dir($directory)) {
+        mkdir($directory, 0775, true);
+    }
+
+    $path = $directory . '/qc_env_stub.php';
+
+    if (!is_file($path)) {
+        file_put_contents($path, <<<'PHP'
+<?php
+
+// Dibuat otomatis oleh tests/bootstrap.php — jangan disunting.
+$overrides = json_decode((string) getenv('QC_ENV_OVERRIDES'), true);
+
+if (is_array($overrides)) {
+    foreach ($overrides as $name => $value) {
+        putenv($name . '=' . $value);
+    }
+}
+PHP);
+    }
+
+    return $path;
 }
 
 /**
