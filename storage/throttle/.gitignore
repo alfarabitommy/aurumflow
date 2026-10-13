@@ -1,0 +1,4 @@
+# Berkas pembatas percobaan login (Fase 5) TIDAK di-commit.
+# Struktur folder TETAP di-commit lewat file penanda ini.
+*
+!.gitignore
