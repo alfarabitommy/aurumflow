@@ -403,8 +403,12 @@ Qc::ok(
 // ---------------------------------------------------------------------------
 Qc::section('Aset statis');
 
-$css = QcHttp::request('GET', '/assets/css/app.css', ['cookie_jar' => QcHttp::cookieJar('anon')]);
+// Sejak Fase 2 aset CSS adalah hasil kompilasi Tailwind CLI (`app.min.css`)
+// dan Alpine.js dikirim sebagai aset lokal (tanpa CDN) — lihat rencana § 3.1.
+$css = QcHttp::request('GET', '/assets/css/app.min.css', ['cookie_jar' => QcHttp::cookieJar('anon')]);
 $js = QcHttp::request('GET', '/assets/js/app.js', ['cookie_jar' => QcHttp::cookieJar('anon')]);
+$alpine = QcHttp::request('GET', '/assets/js/alpine.min.js', ['cookie_jar' => QcHttp::cookieJar('anon')]);
+$legacyCss = QcHttp::request('GET', '/assets/css/app.css', ['cookie_jar' => QcHttp::cookieJar('anon')]);
 
 Qc::ok(
     '5.16',
@@ -412,6 +416,20 @@ Qc::ok(
     $css['status'] === 200 && str_contains($css['body'], ':root')
         && $js['status'] === 200 && str_contains($js['body'], 'use strict'),
     'css=' . $css['status'] . ' js=' . $js['status']
+);
+
+Qc::ok(
+    '5.17',
+    'Alpine.js tersedia sebagai aset lokal, bukan CDN',
+    $alpine['status'] === 200 && str_contains($alpine['body'], 'Alpine'),
+    'alpine=' . $alpine['status']
+);
+
+Qc::ok(
+    '5.18',
+    'CSS lama (app.css) sudah tidak tersedia',
+    $legacyCss['status'] === 404,
+    'app.css=' . $legacyCss['status']
 );
 
 Qc::finish('qc_routing');

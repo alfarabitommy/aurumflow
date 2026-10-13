@@ -18,17 +18,66 @@ declare(strict_types=1);
 */
 
 use AurumFlow\Controllers\AuthController;
+use AurumFlow\Controllers\CapitalController;
 use AurumFlow\Controllers\DashboardController;
+use AurumFlow\Controllers\ExportController;
+use AurumFlow\Controllers\InvestorAuthController;
+use AurumFlow\Controllers\InvestorController;
+use AurumFlow\Controllers\InvestorOnboardingController;
+use AurumFlow\Controllers\SettlementController;
+use AurumFlow\Controllers\TellerController;
 
 return [
     'GET' => [
-        '/'          => [DashboardController::class, 'home'],
-        '/login'     => [AuthController::class, 'showLogin'],
-        '/dashboard' => [DashboardController::class, 'index'],
+        '/'                    => [DashboardController::class, 'home'],
+        '/login'               => [AuthController::class, 'showLogin'],
+
+        // Undangan mitra (Fase 5): halaman publik yang hanya berguna bagi
+        // pemegang token 64 heksadesimal.
+        '/join'                => [InvestorOnboardingController::class, 'show'],
+
+        // Pintu PIN mitra — terpisah dari pintu kata sandi operator.
+        '/investor/login'      => [InvestorAuthController::class, 'showLogin'],
+
+        // Ringkasan operator. Sejak Fase 5 halaman ini memuat isi
+        // `system_settings`, sehingga mitra diarahkan ke dasbornya sendiri.
+        '/dashboard'           => [DashboardController::class, 'index'],
+
+        // Dasbor blind mitra + ekspor ramah awam (Fase 5).
+        '/investor/dashboard'  => [InvestorController::class, 'index'],
+        '/investor/report'     => [ExportController::class, 'report'],
+        '/investor/report/csv' => [ExportController::class, 'csv'],
+
+        '/operator/teller'     => [TellerController::class, 'index'],
+        '/operator/settlement' => [SettlementController::class, 'index'],
+        '/operator/capital'    => [CapitalController::class, 'index'],
     ],
 
     'POST' => [
-        '/login'  => [AuthController::class, 'login'],
-        '/logout' => [AuthController::class, 'logout'],
+        '/login'               => [AuthController::class, 'login'],
+        '/logout'              => [AuthController::class, 'logout'],
+        '/join'                => [InvestorOnboardingController::class, 'submit'],
+        '/investor/login'      => [InvestorAuthController::class, 'login'],
+
+        // Penarikan mandiri mitra — jalur yang mengubah hak dana, jadi
+        // memakai token sekali-pakai `_once` di controller.
+        '/investor/withdrawal' => [InvestorController::class, 'withdrawal'],
+
+        '/operator/teller'     => [TellerController::class, 'store'],
+
+        // Dana talangan (Fase 6): kas masuk dari pihak luar tanpa akun, dengan
+        // token sekali-pakai `_once` (satu halaman = satu token aktif).
+        '/operator/teller/talangan' => [TellerController::class, 'storeBridge'],
+        '/operator/settlement' => [SettlementController::class, 'store'],
+
+        // Kelola modal (Fase 4 + Fase 5). Jalur yang menggerakkan kas (setoran,
+        // Pindah Kas, penarikan) menambah token sekali-pakai `_once`; undangan
+        // tidak perlu karena idempoten secara alami.
+        '/operator/capital/topup'      => [CapitalController::class, 'topUp'],
+        '/operator/capital/mitra'      => [CapitalController::class, 'storeMitra'],
+        '/operator/capital/quota'      => [CapitalController::class, 'updateQuota'],
+        '/operator/capital/transfer'   => [CapitalController::class, 'transfer'],
+        '/operator/capital/withdrawal' => [CapitalController::class, 'withdrawal'],
+        '/operator/capital/invite'     => [CapitalController::class, 'invite'],
     ],
 ];

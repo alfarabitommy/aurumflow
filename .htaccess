@@ -12,8 +12,9 @@ Options -Indexes
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # Tolak semua akses ke direktori backend dan file sensitif.
-    RewriteRule ^(app|database|storage|tests|plan|docs)(/|$) - [F,L]
+    # Tolak semua akses ke direktori backend, sumber build, dan file sensitif.
+    # `resources/` berisi sumber Tailwind yang tidak boleh disajikan statis.
+    RewriteRule ^(app|database|storage|tests|plan|docs|resources)(/|$) - [F,L]
     RewriteRule (^|/)\.(?!well-known) - [F,L]
 
     # Arahkan root ke folder public/ bila memungkinkan.

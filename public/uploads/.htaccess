@@ -28,6 +28,12 @@
     </IfModule>
 </FilesMatch>
 
+# Lepas handler/tipe skrip secara eksplisit: pada cPanel modern (PHP-FPM /
+# LiteSpeed) blok mod_php di atas sering tidak aktif, sehingga ini adalah
+# lapisan yang benar-benar bekerja (SAD § 4.3).
+RemoveHandler .php .php3 .php4 .php5 .php7 .phtml .phar .pht .pl .py .cgi .asp .aspx .jsp .sh
+RemoveType .php .php3 .php4 .php5 .php7 .phtml .phar .pht .pl .py .cgi .asp .aspx .jsp .sh
+
 # Paksa tipe konten generik agar file tidak "ditebak" sebagai HTML/JS.
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"

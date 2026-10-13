@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace AurumFlow\Controllers;
 
+use AurumFlow\Config\Constants;
 use AurumFlow\Helpers\Logger;
+use AurumFlow\Helpers\PinThrottle;
 use AurumFlow\Helpers\Security;
 use AurumFlow\Models\User;
 
@@ -64,17 +66,36 @@ final class AuthController extends BaseController
 
         $user = User::findByPhoneNumber($phoneNumber);
 
+        $ipAddress = User::clientIp() ?? '';
+        $lockedSeconds = PinThrottle::check($phoneNumber, $ipAddress);
+
+        if ($lockedSeconds > 0) {
+            $this->renderLoginFailure(self::lockedMessage($lockedSeconds, true), $phoneNumber, 429);
+
+            return;
+        }
+
         if ($user === null || !User::verifyPassword($user, $password)) {
+            $lockedSeconds = PinThrottle::recordFailure($phoneNumber, $ipAddress);
+
             Logger::warning('Percobaan login gagal', [
                 'phone_number' => $phoneNumber,
                 'ip'           => User::clientIp(),
             ]);
+
+            if ($lockedSeconds > 0) {
+                $this->renderLoginFailure(self::lockedMessage($lockedSeconds, false), $phoneNumber, 429);
+
+                return;
+            }
 
             // Pesan generik: tidak membedakan akun tidak ada vs password salah.
             $this->renderLoginFailure('Nomor telepon atau password salah.', $phoneNumber, 401);
 
             return;
         }
+
+        PinThrottle::clear($phoneNumber, $ipAddress);
 
         // Anti session fixation: ganti ID session lalu terbitkan token CSRF baru.
         Security::regenerateSession();
@@ -92,7 +113,7 @@ final class AuthController extends BaseController
             'ip'      => User::clientIp(),
         ]);
 
-        $this->redirect('/dashboard');
+        $this->redirect(self::roleLandingPath((string) $user['role']));
     }
 
     public function logout(): void
@@ -108,6 +129,7 @@ final class AuthController extends BaseController
         }
 
         $userId = isset($_SESSION['user_id']) ? (string) $_SESSION['user_id'] : '';
+        $role = isset($_SESSION['user_role']) ? (string) $_SESSION['user_role'] : '';
 
         if ($userId !== '') {
             Logger::info('Logout', ['user_id' => $userId]);
@@ -115,7 +137,25 @@ final class AuthController extends BaseController
 
         Security::destroySession();
 
-        $this->redirect('/login');
+        // Mitra kembali ke pintu PIN-nya, operator ke pintu kata sandi —
+        // memakai pemetaan peran yang sama dengan requireRole().
+        $this->redirect($role === Constants::ROLE_INVESTOR ? '/investor/login' : '/login');
+    }
+
+    /**
+     * Pesan ketika percobaan login sedang dikunci `PinThrottle`.
+     *
+     * Memakai sisa detik agar pengguna tahu harus menunggu berapa lama, tetapi
+     * tidak pernah menyebut apakah nomornya terdaftar.
+     */
+    private static function lockedMessage(int $remainingSeconds, bool $fromStart): string
+    {
+        $minutes = max(1, (int) ceil($remainingSeconds / 60));
+
+        return $fromStart
+            ? 'Terlalu banyak percobaan masuk. Coba lagi dalam ' . $minutes . ' menit.'
+            : 'Terlalu banyak percobaan masuk. Akun dikunci sementara — coba lagi dalam '
+                . $minutes . ' menit.';
     }
 
     /**

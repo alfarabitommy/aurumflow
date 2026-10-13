@@ -34,9 +34,11 @@ final class Formatter
 {
     public const MONEY_PREFIX = 'Rp ';
     public const GRAM_SUFFIX = ' ' . Constants::GRAM_UNIT;
+    public const PERCENT_SUFFIX = ' %';
 
     public const DEFAULT_MONEY_DECIMALS = Constants::MONEY_DECIMALS;
     public const DEFAULT_GRAM_DECIMALS = Constants::GRAM_DECIMALS;
+    public const DEFAULT_PERCENT_DECIMALS = 2;
 
     private const MAX_DECIMALS = 6;
 
@@ -95,6 +97,29 @@ final class Formatter
     public static function parseGram(mixed $value): float
     {
         return self::toFloat($value);
+    }
+
+    // -----------------------------------------------------------------------
+    // Persen
+    // -----------------------------------------------------------------------
+
+    /**
+     * Format persentase, contoh `31,02 %`.
+     *
+     * Dipakai Layar D (ROI bulan berjalan & rasio modal berputar). Satu pemilik
+     * format persen supaya angka di dasbor tidak pernah berbeda gayanya dari
+     * angka di laporan cetak maupun CSV.
+     */
+    public static function persen(mixed $value, int $decimals = self::DEFAULT_PERCENT_DECIMALS): string
+    {
+        $number = self::toFloat($value);
+        $decimals = self::clampDecimals($decimals);
+
+        $sign = $number < 0 ? '-' : '';
+
+        return $sign
+            . number_format(abs($number), $decimals, ',', '.')
+            . self::PERCENT_SUFFIX;
     }
 
     // -----------------------------------------------------------------------

@@ -58,6 +58,11 @@ final class App
             'session_name'      => self::readString('SESSION_NAME', 'AURUMFLOW_SESS'),
             'session_lifetime'  => Env::int('SESSION_LIFETIME', 7200),
             'session_save_path' => self::readString('SESSION_SAVE_PATH', ''),
+            // Kunci rahasia PIN mitra (Fase 5). Sengaja boleh kosong di sini:
+            // yang menolak adalah lapisan yang MEMBUAT PIN (`Security::hashPin()`),
+            // bukan boot aplikasi — supaya operator tetap bisa masuk dan
+            // memperbaiki konfigurasi, bukan terkunci di luar sistem.
+            'pin_pepper'        => self::readString('APP_PIN_PEPPER', ''),
         ];
 
         date_default_timezone_set($timezone);
@@ -137,6 +142,38 @@ final class App
         );
 
         return $scriptDir . '/' . $path;
+    }
+
+    /**
+     * URL absolut untuk dikirim keluar aplikasi (Fase 5: tautan undangan mitra
+     * yang disalin operator ke WhatsApp).
+     *
+     * Memakai `APP_URL` bila diisi. Bila kosong, host diambil dari request
+     * sebagai upaya terakhir — cukup untuk lingkungan pengembangan, sementara
+     * produksi dianjurkan mengisi `APP_URL` supaya tautan tidak bergantung pada
+     * header `Host` (yang dapat dipalsukan).
+     */
+    public static function absoluteUrl(string $path = ''): string
+    {
+        $relative = self::url($path);
+
+        if (self::isCli()) {
+            return $relative;
+        }
+
+        $base = self::baseUrl();
+
+        if ($base === '') {
+            $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+
+            if (preg_match('/^[A-Za-z0-9.\-]+(?::\d{1,5})?$/', $host) !== 1) {
+                return $relative;
+            }
+
+            $base = (self::isHttps() ? 'https://' : 'http://') . $host;
+        }
+
+        return rtrim($base, '/') . $relative;
     }
 
     public static function isHttps(): bool

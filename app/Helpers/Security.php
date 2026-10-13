@@ -35,6 +35,30 @@ final class Security
     /** Panjang minimum password (kebijakan ringan, didokumentasikan). */
     public const PASSWORD_MIN_LENGTH = 8;
 
+    /**
+     * Field hidden token sekali-pakai (anti double-submit — Fase 2, A-5).
+     *
+     * Berbeda dari CSRF: token CSRF stabil selama satu session sehingga
+     * halaman yang sama sah dikirim berkali-kali, sedangkan token ini
+     * HANGUS setelah satu submit diterima.
+     */
+    public const FORM_FIELD = '_once';
+
+    /** Kunci session penyimpan token form yang masih aktif. */
+    public const FORM_SESSION_KEY = '_form_token';
+
+    /** Kunci session penyimpan token form terakhir yang sudah dikonsumsi. */
+    public const FORM_CONSUMED_KEY = '_form_token_used';
+
+    /** Hasil `consumeFormToken()`: submit sah. */
+    public const FORM_OK = 'ok';
+
+    /** Hasil `consumeFormToken()`: token ini sudah pernah dipakai. */
+    public const FORM_DUPLICATE = 'duplicate';
+
+    /** Hasil `consumeFormToken()`: token kosong / tidak dikenal / kedaluwarsa. */
+    public const FORM_INVALID = 'invalid';
+
     private function __construct()
     {
     }
@@ -110,6 +134,86 @@ final class Security
     public static function needsRehash(string $hash): bool
     {
         return password_needs_rehash($hash, PASSWORD_DEFAULT);
+    }
+
+    // -----------------------------------------------------------------------
+    // PIN mitra (Fase 5) — ber-pepper
+    // -----------------------------------------------------------------------
+
+    /**
+     * Panjang PIN yang sah. Satu tempat, dipakai lapisan validasi & view.
+     */
+    public const PIN_LENGTH = 6;
+
+    /**
+     * Hash PIN mitra: `password_hash(hash_hmac('sha256', pin, APP_PIN_PEPPER))`.
+     *
+     * Mengapa di-HMAC lebih dulu:
+     *   1. Ruang PIN hanya 10⁶. Tanpa pepper, siapa pun yang menyalin tabel
+     *      `users` dapat memecahkan seluruh PIN dalam hitungan detik.
+     *   2. Karena hash yang tersimpan adalah hash dari **HMAC**, PIN tidak
+     *      pernah cocok di `verifyPassword()` — artinya pintu kata sandi
+     *      (`/login`) tidak dapat dipakai untuk menebak PIN, sehingga pembatas
+     *      percobaan pada pintu PIN tidak bisa dilewati.
+     *
+     * @throws \RuntimeException `APP_PIN_PEPPER` belum dikonfigurasi (fail-closed)
+     */
+    public static function hashPin(string $pin): string
+    {
+        return self::hashPassword(self::pepperedPin($pin, true));
+    }
+
+    /**
+     * Verifikasi PIN terhadap hash tersimpan.
+     *
+     * Berbeda dari `hashPin()`, di sini pepper yang kosong **tidak** melempar
+     * exception melainkan mengembalikan `false`: percobaan login dengan
+     * konfigurasi rusak cukup dijawab seperti PIN salah (pesan generik), tanpa
+     * membocorkan keadaan konfigurasi ke pengunjung anonim. Operator melihat
+     * sebabnya lewat log.
+     */
+    public static function verifyPin(string $pin, string $hash): bool
+    {
+        if ($hash === '') {
+            return false;
+        }
+
+        $peppered = self::pepperedPin($pin, false);
+
+        if ($peppered === null) {
+            return false;
+        }
+
+        return self::verifyPassword($peppered, $hash);
+    }
+
+    /**
+     * Apakah pepper sudah dikonfigurasi (dipakai lapisan onboarding & QC).
+     */
+    public static function pinPepperConfigured(): bool
+    {
+        return self::pepperedPin('000000', false) !== null;
+    }
+
+    /**
+     * Hitung HMAC PIN. `$required = true` melempar bila pepper kosong.
+     */
+    private static function pepperedPin(string $pin, bool $required): ?string
+    {
+        $pepper = trim((string) App::get('pin_pepper', ''));
+
+        if ($pepper === '') {
+            if ($required) {
+                throw new \RuntimeException(
+                    'APP_PIN_PEPPER belum dikonfigurasi. Isi kunci acak pada .env '
+                    . 'sebelum mitra membuat PIN.'
+                );
+            }
+
+            return null;
+        }
+
+        return hash_hmac('sha256', $pin, $pepper);
     }
 
     /**
@@ -207,6 +311,77 @@ final class Security
         unset($_SESSION[self::CSRF_SESSION_KEY], $_SESSION[self::CSRF_TIME_KEY]);
 
         self::issueCsrfToken();
+    }
+
+    // -----------------------------------------------------------------------
+    // Token sekali-pakai (anti double-submit)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Terbitkan token form, atau kembalikan yang masih aktif.
+     *
+     * Dipakai form mutasi kas: menggeser tombol konfirmasi dua kali,
+     * menekan Back, atau retry jaringan setelah timeout tidak boleh
+     * membayar dua kali untuk timbangan yang sama.
+     */
+    public static function issueFormToken(): string
+    {
+        if (!self::sessionIsActive()) {
+            throw new \RuntimeException('Token form membutuhkan session aktif.');
+        }
+
+        $existing = $_SESSION[self::FORM_SESSION_KEY] ?? null;
+
+        if (is_array($existing)
+            && is_string($existing['value'] ?? null)
+            && !self::formTokenExpired((int) ($existing['time'] ?? 0))
+        ) {
+            return (string) $existing['value'];
+        }
+
+        return self::newFormToken();
+    }
+
+    /**
+     * Konsumsi token dari request.
+     *
+     * @return string salah satu dari FORM_OK, FORM_DUPLICATE, FORM_INVALID
+     */
+    public static function consumeFormToken(?string $token): string
+    {
+        if (!self::sessionIsActive() || $token === null || $token === '') {
+            return self::FORM_INVALID;
+        }
+
+        $active = $_SESSION[self::FORM_SESSION_KEY] ?? null;
+
+        if (is_array($active) && is_string($active['value'] ?? null)) {
+            if (self::formTokenExpired((int) ($active['time'] ?? 0))) {
+                unset($_SESSION[self::FORM_SESSION_KEY]);
+            } elseif (hash_equals($active['value'], $token)) {
+                // Hanguskan segera supaya request berikutnya dengan token yang
+                // sama tidak pernah lagi menemukan token aktif.
+                unset($_SESSION[self::FORM_SESSION_KEY]);
+                $_SESSION[self::FORM_CONSUMED_KEY] = [
+                    'value' => $active['value'],
+                    'time'  => time(),
+                ];
+
+                return self::FORM_OK;
+            }
+        }
+
+        $consumed = $_SESSION[self::FORM_CONSUMED_KEY] ?? null;
+
+        if (is_array($consumed)
+            && is_string($consumed['value'] ?? null)
+            && !self::formTokenExpired((int) ($consumed['time'] ?? 0))
+            && hash_equals($consumed['value'], $token)
+        ) {
+            return self::FORM_DUPLICATE;
+        }
+
+        return self::FORM_INVALID;
     }
 
     // -----------------------------------------------------------------------
@@ -364,5 +539,31 @@ final class Security
         $_SESSION[self::CSRF_TIME_KEY] = time();
 
         return $token;
+    }
+
+    private static function newFormToken(): string
+    {
+        $token = self::randomToken(32);
+
+        $_SESSION[self::FORM_SESSION_KEY] = [
+            'value' => $token,
+            'time'  => time(),
+        ];
+
+        return $token;
+    }
+
+    /**
+     * Token form mengikuti masa hidup session yang sama dengan token CSRF.
+     */
+    private static function formTokenExpired(int $issuedAt): bool
+    {
+        if ($issuedAt <= 0) {
+            return true;
+        }
+
+        $lifetime = (int) App::get('session_lifetime', 7200);
+
+        return $lifetime > 0 && (time() - $issuedAt) > $lifetime;
     }
 }

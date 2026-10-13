@@ -18,13 +18,22 @@
 /public/uploads/*
 !/public/uploads/.gitignore
 !/public/uploads/.htaccess
+!/public/uploads/receipts/
+!/public/uploads/receipts/.gitignore
 
 # --- Marker instalasi ---
 /storage/installed.lock
 
+# --- Pembatas percobaan login (Fase 5; berkas JSON kecil, isi runtime) ---
+/storage/throttle/*
+!/storage/throttle/.gitignore
+
 # --- Cache / artefak QC ---
 /tests/.tmp/
 *.tmp
+
+# --- State runtime agen (Reasonix) ---
+.reasonix/
 
 # --- Editor & OS ---
 .idea/

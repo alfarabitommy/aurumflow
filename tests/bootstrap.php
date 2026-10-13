@@ -24,8 +24,18 @@ use AurumFlow\Config\App;
 use AurumFlow\Config\Constants;
 use AurumFlow\Config\Database;
 use AurumFlow\Config\Env;
+use AurumFlow\Helpers\PinThrottle;
 use AurumFlow\Helpers\Security;
+use AurumFlow\Models\BridgeLoan;
+use AurumFlow\Models\CapitalWallet;
+use AurumFlow\Models\CashRegister;
+use AurumFlow\Models\HuluTransaction;
+use AurumFlow\Models\SystemSetting;
 use AurumFlow\Models\User;
+use AurumFlow\Services\BridgeLoanService;
+use AurumFlow\Services\OnboardingService;
+use AurumFlow\Services\SettlementService;
+use AurumFlow\Services\TellerService;
 
 // ---------------------------------------------------------------------------
 // Qc — harness assertion
@@ -240,7 +250,11 @@ final class QcHttp
     }
 
     /**
-     * @param array<string, string> $options headers, data, cookie_jar, fresh
+     * @param array<string, mixed> $options headers, data, files, cookie_jar, fresh
+     *        `files` berisi peta nama-field => path berkas lokal; bila diisi,
+     *        request dikirim sebagai MULTIPART (curl membentuk boundary) sehingga
+     *        peladen melihat unggahan HTTP sungguhan — dipakai QC Fase 3 untuk
+     *        menguji nota tanpa kamera.
      * @return array{status: int, headers: string, body: string, location: ?string}
      */
     public static function request(string $method, string $path, array $options = []): array
@@ -254,7 +268,7 @@ final class QcHttp
      * Request ke URL absolut — dipakai untuk menguji server sementara
      * (mis. install.php saat document root salah konfigurasi).
      *
-     * @param array<string, string> $options
+     * @param array<string, mixed> $options
      * @return array{status: int, headers: string, body: string, location: ?string}
      */
     public static function fetch(string $url, string $method = 'GET', array $options = []): array
@@ -286,7 +300,22 @@ final class QcHttp
 
         if ($method === 'POST') {
             $data = $options['data'] ?? [];
-            curl_setopt($handle, CURLOPT_POSTFIELDS, is_string($data) ? $data : http_build_query($data));
+            $files = $options['files'] ?? [];
+
+            if (is_array($files) && $files !== []) {
+                // Array (bukan query string) membuat curl mengirim multipart.
+                $fields = is_array($data) ? $data : [];
+
+                foreach ($files as $field => $path) {
+                    if (is_string($path) && is_file($path)) {
+                        $fields[(string) $field] = new CURLFile($path);
+                    }
+                }
+
+                curl_setopt($handle, CURLOPT_POSTFIELDS, $fields);
+            } else {
+                curl_setopt($handle, CURLOPT_POSTFIELDS, is_string($data) ? $data : http_build_query($data));
+            }
         }
 
         $raw = curl_exec($handle);
@@ -327,7 +356,18 @@ final class QcHttp
      */
     public static function csrfFrom(string $html): ?string
     {
-        $pattern = '/name="' . preg_quote(Security::CSRF_FIELD, '/') . '"\s+value="([^"]*)"/i';
+        return self::fieldFrom($html, Security::CSRF_FIELD);
+    }
+
+    /**
+     * Ambil nilai field hidden apa pun dari HTML halaman.
+     *
+     * Dipakai QC Fase 2 untuk token sekali-pakai `_once` (anti double-submit),
+     * yang berbeda dari token CSRF.
+     */
+    public static function fieldFrom(string $html, string $field): ?string
+    {
+        $pattern = '/name="' . preg_quote($field, '/') . '"\s+value="([^"]*)"/i';
 
         if (preg_match($pattern, $html, $matches) === 1) {
             return html_entity_decode($matches[1], ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -423,8 +463,10 @@ final class QcFixture
         $existing = User::findByPhoneNumber($phone, false);
 
         if ($existing === null) {
-            User::create($name, $phone, $password, Constants::ROLE_OPERATOR);
+            $operatorId = User::create($name, $phone, $password, Constants::ROLE_OPERATOR);
         } else {
+            $operatorId = (string) $existing['id'];
+
             // Pastikan password QC selalu dikenal, apa pun kondisi database.
             Database::update(
                 'users',
@@ -434,9 +476,21 @@ final class QcFixture
                     'is_active'     => 1,
                 ],
                 '`id` = :id',
-                ['id' => (string) $existing['id']]
+                ['id' => $operatorId]
             );
         }
+
+        // Dompet Pengelola (Fase 4) mengikuti perilaku `database/install.php`,
+        // sehingga keadaan QC sama dengan keadaan produksi: settlement memakai
+        // prioritas serapan 50 % bila dompetnya bermodal.
+        CapitalWallet::ensureOperatorWallet($operatorId);
+
+        // Pembatas percobaan login (Fase 5) dikosongkan di sini supaya suite
+        // yang sengaja memaksa login GAGAL (mis. `qc_routing`, `qc_fase_5`)
+        // tidak pernah mewarisi kunci dari suite sebelumnya — ambang 5 gagal
+        // per 15 menit akan membuat uji berikutnya gagal karena alasan yang
+        // sama sekali berbeda.
+        PinThrottle::clearAll();
 
         return ['phone' => $phone, 'password' => $password, 'name' => $name];
     }
@@ -504,6 +558,944 @@ final class QcFixture
         }
 
         return $violations;
+    }
+
+    /**
+     * Siapkan pos kas meja hulu untuk skenario QC Fase 2. Idempotent.
+     *
+     * Setara instruksi manual "Isi saldo awal Kas Meja Bakar melalui
+     * phpMyAdmin sebesar Rp 50.000.000" pada Protokol QC Manual 2, sekaligus
+     * membersihkan jejak transaksi supaya suite dapat dijalankan berkali-kali
+     * dengan hasil yang sama.
+     *
+     * @return array{register_id: string, register_name: string, balance: string, opening_balance: string}
+     */
+    public static function resetTellerState(): array
+    {
+        self::ensureInstalled();
+
+        $register = CashRegister::activeTeller();
+
+        if ($register === null) {
+            throw new RuntimeException('Pos kas "' . CashRegister::TELLER_NAME . '" tidak ada setelah seed.');
+        }
+
+        $registerId = (string) $register['id'];
+        $openingBalance = '50000000.00';
+
+        // Talangan lebih dulu (Fase 6): baris `bridge_loans` menunjuk pos kas &
+        // sesi tutup buku, dan suite ini mengosongkan mutasi pos kas meja —
+        // membiarkannya hidup berarti talangan tanpa kas masuk yang tercatat.
+        self::resetBridgeState();
+
+        // Bersihkan hanya jejak milik pos kas meja; pos lain tidak disentuh.
+        Database::query(
+            'DELETE FROM `cash_mutations` WHERE `register_id` = :register_id',
+            ['register_id' => $registerId]
+        );
+
+        // Seluruh baris hulu berasal dari QC Fase 2 (belum ada fitur lain).
+        Database::query('DELETE FROM `hulu_transactions`');
+
+        Database::query(
+            'UPDATE `cash_registers` SET `current_balance` = :balance WHERE `id` = :register_id',
+            ['balance' => $openingBalance, 'register_id' => $registerId]
+        );
+
+        return [
+            'register_id'     => $registerId,
+            'register_name'   => (string) $register['register_name'],
+            'balance'         => self::registerBalance($registerId),
+            'opening_balance' => $openingBalance,
+        ];
+    }
+
+    /**
+     * Saldo terkini sebuah pos kas sebagai string desimal kanonik.
+     */
+    public static function registerBalance(string $registerId): string
+    {
+        $row = Database::fetchOne(
+            'SELECT `current_balance` FROM `cash_registers` WHERE `id` = :register_id LIMIT 1',
+            ['register_id' => $registerId]
+        );
+
+        return (string) ($row['current_balance'] ?? '0.00');
+    }
+
+    // -----------------------------------------------------------------------
+    // Fixture Fase 3 — likuidasi toko & tutup buku
+    // -----------------------------------------------------------------------
+
+    /**
+     * Bangun ulang KEADAAN AKHIR Protokol QC Manual 2 secara idempotent.
+     *
+     * Setara instruksi manual dokumen Roadmap: "Isi saldo awal Kas Meja Bakar
+     * Rp 50.000.000, lalu input dua transaksi", tetapi dijalankan lewat jalur
+     * kode nyata (`TellerService::payCash()`) sehingga yang diuji adalah
+     * perilaku sistem, bukan INSERT langsung.
+     *
+     * Setelah fungsi ini: kas meja `14.842.500`, emas `holding` `18,050 gr`
+     * dengan modal belanja `35.157.500`, brankas `0`, defisit berjalan `0`,
+     * dan seluruh jejak settlement dihapus.
+     *
+     * @return array{teller_id: string, teller_balance: string,
+     *               brankas_id: string, brankas_balance: string,
+     *               holding_grams: string, holding_cost: string,
+     *               holding_count: int}
+     */
+    public static function resetSettlementState(): array
+    {
+        $fixture = self::resetTellerState();
+
+        self::clearSettlementTraces();
+
+        // Dua kedatangan hulu yang sama dengan Protokol QC Manual 2.
+        TellerService::payCash([
+            'weight'       => '14,850',
+            'price'        => '1.950.000',
+            'farmer_alias' => 'Pak Anto',
+        ]);
+
+        TellerService::payCash([
+            'weight'       => '3,200',
+            'price'        => '1.950.000',
+            'farmer_alias' => 'Petani B-02',
+        ]);
+
+        return self::settlementSnapshot($fixture['register_id']);
+    }
+
+    /**
+     * Tambahkan satu kedatangan hulu pada KEADAAN SAAT INI (tanpa membersihkan).
+     *
+     * Dipakai skenario lanjutan (mis. "settlement esoknya" pada Protokol 3.3):
+     * kas meja berkurang sesuai pembelian, dan emas baru berstatus `holding`.
+     *
+     * @return array<string, mixed> ringkasan `TellerService::payCash()`
+     */
+    public static function seedHoldingBatch(
+        string $grams,
+        string $price,
+        string $alias = 'QC Hulu Lanjutan'
+    ): array {
+        return TellerService::payCash([
+            'weight'       => $grams,
+            'price'        => $price,
+            'farmer_alias' => $alias,
+        ]);
+    }
+
+    /**
+     * Bersihkan seluruh jejak tutup buku dan berkas nota, lalu kembalikan
+     * kas brankas ke nol dan defisit berjalan ke nol.
+     *
+     * Sejak Fase 4, satu sesi tutup buku juga menulis `profit_distributions`
+     * dan mengkredit `capital_wallets.balance_profit`; keduanya harus
+     * dibersihkan lebih dulu karena `profit_distributions.settlement_id`
+     * memakai FK `ON DELETE RESTRICT` (ERD § 4) — tanpa itu penghapusan
+     * `daily_settlements` gagal.
+     *
+     * Seluruh dompet modal juga DINETRALKAN (`neutraliseWallets()`): mesin
+     * alokasi membaca SEMUA dompet, sehingga dompet yang dibuat manual saat
+     * pengujian lapangan (kuota/saldo bukan nol) akan ikut menyerap modal dan
+     * merusak keadaan yang diharapkan skenario QC. Menolkan nilai — bukan
+     * menghapus baris dompet — menjaga data pengujian pemilik aplikasi.
+     */
+    public static function clearSettlementTraces(): void
+    {
+        // Talangan lebih dulu (Fase 6): `bridge_loans.settlement_id` memakai FK
+        // `ON DELETE RESTRICT`, jadi baris anak harus dibuang sebelum sesi.
+        self::resetBridgeState();
+
+        // Distribusi lebih dulu: FK RESTRICT ke daily_settlements.
+        Database::query('DELETE FROM `profit_distributions`');
+        Database::query('DELETE FROM `daily_settlements`');
+
+        self::neutraliseWallets();
+
+        $brankas = CashRegister::findBrankas();
+
+        if ($brankas !== null) {
+            Database::query(
+                'DELETE FROM `cash_mutations` WHERE `register_id` = :register_id',
+                ['register_id' => (string) $brankas['id']]
+            );
+
+            Database::query(
+                'UPDATE `cash_registers` SET `current_balance` = :balance WHERE `id` = :register_id',
+                ['balance' => '0.00', 'register_id' => (string) $brankas['id']]
+            );
+        }
+
+        SystemSetting::set(SettlementService::SETTING_ACTIVE_DEFICIT, '0.00');
+
+        self::purgeReceiptFiles();
+    }
+
+    /**
+     * Bersihkan seluruh jejak dana talangan (Fase 6). Idempotent.
+     *
+     * Wajib berjalan SEBELUM `daily_settlements` dihapus: `bridge_loans.settlement_id`
+     * memakai FK `ON DELETE RESTRICT` (pola `profit_distributions`). Saldo pos kas
+     * TIDAK disentuh di sini — itu urusan `resetTellerState()`.
+     */
+    public static function resetBridgeState(): void
+    {
+        Database::query('DELETE FROM `bridge_loans`');
+    }
+
+    /**
+     * Catat satu dana talangan lewat jalur kode nyata (`BridgeLoanService::receive()`).
+     *
+     * @param array<string, mixed> $override nilai form yang ditimpa
+     * @return array<string, mixed> ringkasan `receive()`
+     */
+    public static function seedBridgeLoan(array $override = []): array
+    {
+        return BridgeLoanService::receive($override + [
+            'lender_name'      => 'Pak Haji Daud',
+            'principal_amount' => '10.000.000',
+            'fee_type'         => BridgeLoanService::FEE_TYPE_FIXED,
+            'fee_rate_pct'     => '',
+            'fee_fixed'        => '100.000',
+            'notes'            => '',
+        ]);
+    }
+
+    /**
+     * Ringkasan keadaan dana talangan saat ini.
+     *
+     * @return array{count_active: int, count_settled: int, principal: string,
+     *               fee: string, absorbed: string, uncovered: string,
+     *               total_return: string, meja_balance: string}
+     */
+    public static function bridgeSnapshot(): array
+    {
+        $row = Database::fetchOne(
+            'SELECT '
+            . 'SUM(CASE WHEN `status` = :active THEN 1 ELSE 0 END) AS `active_count`, '
+            . 'SUM(CASE WHEN `status` = :settled THEN 1 ELSE 0 END) AS `settled_count`, '
+            . 'COALESCE(SUM(`principal_amount`), 0) AS `principal`, '
+            . 'COALESCE(SUM(`fee_amount`), 0) AS `fee`, '
+            . 'COALESCE(SUM(`fee_absorbed`), 0) AS `absorbed`, '
+            . 'COALESCE(SUM(`fee_uncovered`), 0) AS `uncovered` '
+            . 'FROM `bridge_loans`',
+            ['active' => BridgeLoan::STATUS_ACTIVE, 'settled' => BridgeLoan::STATUS_SETTLED]
+        );
+
+        $teller = CashRegister::activeTeller();
+        $principal = self::canonicalMoney((string) ($row['principal'] ?? '0'));
+        $fee = self::canonicalMoney((string) ($row['fee'] ?? '0'));
+
+        return [
+            'count_active'  => (int) ($row['active_count'] ?? 0),
+            'count_settled' => (int) ($row['settled_count'] ?? 0),
+            'principal'     => $principal,
+            'fee'           => $fee,
+            'absorbed'      => self::canonicalMoney((string) ($row['absorbed'] ?? '0')),
+            'uncovered'     => self::canonicalMoney((string) ($row['uncovered'] ?? '0')),
+            'total_return'  => TellerService::centsToDecimal(
+                TellerService::moneyToCents($principal) + TellerService::moneyToCents($fee)
+            ),
+            'meja_balance'  => $teller === null ? '0.00' : self::registerBalance((string) $teller['id']),
+        ];
+    }
+
+    /**
+     * Nilai agregat MySQL -> desimal kanonik 2 angka.
+     */
+    private static function canonicalMoney(string $value): string
+    {
+        $value = trim($value);
+
+        if (preg_match('/^(\d+)(?:\.(\d{1,2}))?$/', $value, $matches) !== 1) {
+            return '0.00';
+        }
+
+        return $matches[1] . '.' . str_pad((string) ($matches[2] ?? ''), 2, '0', STR_PAD_RIGHT);
+    }
+
+    /**
+     * Siapkan keadaan dengan SATU kedatangan hulu saja (skenario hari minus).
+     *
+     * Kas meja: Rp 50.000.000 − kas keluar bersih pembelian. Defisit berjalan
+     * nol, brankas nol, dan tidak ada jejak settlement sebelumnya.
+     *
+     * @return array{teller_id: string, teller_balance: string,
+     *               brankas_id: string, brankas_balance: string,
+     *               holding_grams: string, holding_cost: string,
+     *               holding_count: int}
+     */
+    public static function resetSingleHoldingState(
+        string $grams = '1,000',
+        string $price = '1.950.000'
+    ): array {
+        $fixture = self::resetTellerState();
+
+        self::clearSettlementTraces();
+        self::seedHoldingBatch($grams, $price, 'QC Hulu Tunggal');
+
+        return self::settlementSnapshot($fixture['register_id']);
+    }
+
+    /**
+     * Ringkasan keadaan settlement saat ini.
+     *
+     * @return array{teller_id: string, teller_balance: string,
+     *               brankas_id: string, brankas_balance: string,
+     *               holding_grams: string, holding_cost: string,
+     *               holding_count: int}
+     */
+    public static function settlementSnapshot(string $tellerId): array
+    {
+        $brankas = CashRegister::findBrankas();
+
+        if ($brankas === null) {
+            throw new RuntimeException('Pos kas "' . CashRegister::BRANKAS_NAME . '" tidak ada setelah seed.');
+        }
+
+        $totals = HuluTransaction::holdingTotals();
+
+        return [
+            'teller_id'        => $tellerId,
+            'teller_balance'   => self::registerBalance($tellerId),
+            'brankas_id'       => (string) $brankas['id'],
+            'brankas_balance'  => self::registerBalance((string) $brankas['id']),
+            'holding_grams'    => $totals['grams'],
+            'holding_cost'     => $totals['cost'],
+            'holding_count'    => $totals['count'],
+        ];
+    }
+
+    /**
+     * Daftar berkas nota yang benar-benar ada di direktori unggahan.
+     *
+     * @return list<string> nama berkas (tanpa direktori), terurut
+     */
+    public static function receiptFiles(): array
+    {
+        $directory = SettlementService::receiptDirectory();
+
+        if (!is_dir($directory)) {
+            return [];
+        }
+
+        $files = [];
+
+        foreach ((array) scandir($directory) as $entry) {
+            $name = (string) $entry;
+
+            if ($name === '' || $name === '.' || $name === '..' || $name === '.gitignore') {
+                continue;
+            }
+
+            if (is_file($directory . '/' . $name)) {
+                $files[] = $name;
+            }
+        }
+
+        sort($files);
+
+        return $files;
+    }
+
+    /**
+     * Hapus seluruh berkas nota (sisa QC sebelumnya). Mengembalikan jumlah
+     * berkas yang dihapus.
+     */
+    public static function purgeReceiptFiles(): int
+    {
+        $directory = SettlementService::receiptDirectory();
+        $removed = 0;
+
+        foreach (self::receiptFiles() as $name) {
+            if (@unlink($directory . '/' . $name)) {
+                $removed++;
+            }
+        }
+
+        return $removed;
+    }
+
+    // -----------------------------------------------------------------------
+    // Fixture Fase 4 — dompet modal, distribusi dividen, antrean penarikan
+    // -----------------------------------------------------------------------
+
+    /**
+     * Spesifikasi dompet uji Protokol QC Manual 4.
+     *
+     * Dompet Pengelola memakai AKUN OPERATOR ASLI (seperti "Pengelola (Kamu)"
+     * pada dokumen Roadmap), sedangkan tiga mitra memakai akun uji berawalan
+     * `0899` yang dibersihkan kembali oleh `resetCapitalState()`.
+     *
+     * @var list<array{key: string, phone: string, name: string, tier: string,
+     *                 balance: string, quota: string}>
+     */
+    public const QC_WALLETS = [
+        [
+            'key'     => 'operator',
+            'phone'   => '',
+            'name'    => 'Pengelola',
+            'tier'    => 'operator',
+            'balance' => '30000000.00',
+            'quota'   => '0.00',
+        ],
+        [
+            'key'     => 'priority',
+            'phone'   => '089900000102',
+            'name'    => 'QC Mitra Prioritas',
+            'tier'    => 'family',
+            'balance' => '16000000.00',
+            'quota'   => '20.00',
+        ],
+        [
+            'key'     => 'reguler_a',
+            'phone'   => '089900000103',
+            'name'    => 'QC Mitra Reguler A',
+            'tier'    => 'external',
+            'balance' => '20000000.00',
+            'quota'   => '0.00',
+        ],
+        [
+            'key'     => 'reguler_b',
+            'phone'   => '089900000104',
+            'name'    => 'QC Mitra Reguler B',
+            'tier'    => 'external',
+            'balance' => '14000000.00',
+            'quota'   => '0.00',
+        ],
+    ];
+
+    /**
+     * Netralkan SELURUH dompet modal: saldo, dividen, kuota, dan status
+     * penarikan menjadi nol. Baris dompet TIDAK dihapus.
+     *
+     * Mengapa ada: `AllocationEngine` membaca SEMUA dompet pada setiap sesi
+     * tutup buku. Dompet yang dibuat manual saat pengujian lapangan (mis. lewat
+     * form "Tambah Mitra", lengkap dengan setoran & kuota) akan ikut menyerap
+     * modal dan memakan kuota Mitra Prioritas, sehingga angka protokol QC
+     * bergeser. Menolkan nilai menjaga skenario deterministik tanpa menghapus
+     * data pengujian pemilik aplikasi — pola yang sama dengan
+     * `resetTellerState()` yang menolkan saldo Kas Meja Bakar.
+     */
+    public static function neutraliseWallets(): void
+    {
+        Database::query(
+            'UPDATE `capital_wallets` SET `balance_capital` = \'0.00\', `balance_profit` = \'0.00\', '
+            . '`locked_quota_pct` = \'0.00\', `withdrawal_status` = \'none\', `withdrawal_request_date` = NULL'
+        );
+    }
+
+    /**
+     * Siapkan empat dompet Protokol QC Manual 4 dengan saldo & kuota persis
+     * seperti dokumen Roadmap FASE 4. Idempotent dan **tidak menghapus apa pun**,
+     * sehingga dapat dipanggil setelah fixture lain (mis. keadaan akhir QC 2).
+     *
+     * @return array<string, string> peta kunci dompet => wallet_id
+     */
+    public static function seedQcWallets(): array
+    {
+        $operatorPhone = Env::get('OPERATOR_PHONE') ?? '081200000001';
+        $operatorUser = User::findByPhoneNumber($operatorPhone, false);
+
+        if ($operatorUser === null) {
+            $operatorId = User::create(
+                Env::get('OPERATOR_FULL_NAME') ?? 'Pengelola AurumFlow',
+                $operatorPhone,
+                Env::get('OPERATOR_PASSWORD') ?? 'Aurum2026!',
+                Constants::ROLE_OPERATOR
+            );
+        } else {
+            $operatorId = (string) $operatorUser['id'];
+        }
+
+        $wallets = ['operator' => CapitalWallet::ensureOperatorWallet($operatorId)];
+
+        foreach (self::QC_WALLETS as $spec) {
+            if ($spec['key'] === 'operator') {
+                continue;
+            }
+
+            $user = User::findByPhoneNumber($spec['phone'], false);
+
+            if ($user === null) {
+                $userId = User::create(
+                    $spec['name'],
+                    $spec['phone'],
+                    Security::randomToken(32),
+                    Constants::ROLE_INVESTOR
+                );
+            } else {
+                $userId = (string) $user['id'];
+            }
+
+            $wallet = CapitalWallet::findByUserId($userId);
+            $walletId = $wallet === null
+                ? CapitalWallet::insert($userId, $spec['tier'])
+                : (string) $wallet['id'];
+
+            $wallets[$spec['key']] = $walletId;
+        }
+
+        foreach (self::QC_WALLETS as $spec) {
+            self::setWalletState($wallets[$spec['key']], $spec['balance'], '0.00', $spec['quota']);
+        }
+
+        return $wallets;
+    }
+
+    /**
+     * Kembalikan keadaan modal ke titik nol: buang distribusi & permohonan
+     * penarikan, hapus akun mitra uji, dan nolkan seluruh dompet. Idempotent.
+     *
+     * Tidak menyentuh kas pos (meja/brankas) — itu urusan
+     * `resetTellerState()`/`clearSettlementTraces()`.
+     */
+    public static function resetCapitalState(): void
+    {
+        self::ensureInstalled();
+
+        Database::query('DELETE FROM `profit_distributions`');
+        Database::query('DELETE FROM `withdrawal_requests`');
+
+        $testUsers = Database::fetchAll(
+            'SELECT `id` FROM `users` WHERE `phone_number` LIKE :prefix',
+            ['prefix' => '0899%']
+        );
+
+        foreach ($testUsers as $user) {
+            $userId = (string) ($user['id'] ?? '');
+
+            if ($userId === '') {
+                continue;
+            }
+
+            Database::query('DELETE FROM `capital_wallets` WHERE `user_id` = :user_id', ['user_id' => $userId]);
+            Database::query('DELETE FROM `users` WHERE `id` = :user_id', ['user_id' => $userId]);
+        }
+
+        self::neutraliseWallets();
+    }
+
+    /**
+     * Setel saldo & kuota satu dompet secara langsung (tanpa jalur uang).
+     */
+    public static function setWalletState(
+        string $walletId,
+        string $capital = '0.00',
+        string $profit = '0.00',
+        string $quota = '0.00'
+    ): void {
+        Database::query(
+            'UPDATE `capital_wallets` SET `balance_capital` = :capital, `balance_profit` = :profit, '
+            . '`locked_quota_pct` = :quota WHERE `id` = :id',
+            ['capital' => $capital, 'profit' => $profit, 'quota' => $quota, 'id' => $walletId]
+        );
+    }
+
+    /**
+     * Ringkasan keadaan modal (dompet, distribusi, permintaan penarikan).
+     *
+     * @return array{wallets: list<array<string, mixed>>,
+     *               distributions: int, withdrawals: int}
+     */
+    public static function capitalSnapshot(): array
+    {
+        return [
+            'wallets'       => CapitalWallet::listWithUser(),
+            'distributions' => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `profit_distributions`'
+            )['total'] ?? 0),
+            'withdrawals'   => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `withdrawal_requests`'
+            )['total'] ?? 0),
+        ];
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase 5 — mitra QC: onboarding, PIN, dasbor blind, ekspor
+    // -----------------------------------------------------------------------
+
+    /**
+     * Mitra QC Fase 5 yang sudah onboarding — pemilik dasbor yang diuji.
+     *
+     * `capital` Rp 20.000.000 mengikuti dompet Protokol QC Manual 4, dan
+     * putaran terakhirnya memakai `capital_utilized` Rp 6.204.264,71 sehingga
+     * "Modal Berputar" dasbor menguji angka yang sama dengan dokumen Roadmap:
+     * Rp 6.204.265 dari modal Rp 20.000.000 → rasio 31,02 %.
+     */
+    public const QC_INVESTOR = [
+        'phone'   => '089800000101',
+        'name'    => 'QC Mitra Fase Lima',
+        'tier'    => 'family',
+        'pin'     => '246810',
+        'capital' => '20000000.00',
+    ];
+
+    /**
+     * Calon mitra QC Fase 5 yang BELUM onboarding (tautan aktif, belum tanda
+     * tangan) — objek uji untuk klaim undangan & kebijakan PIN.
+     */
+    public const QC_INVITEE = [
+        'phone' => '089800000102',
+        'name'  => 'QC Calon Mitra',
+        'tier'  => 'external',
+        'pin'   => '135790',
+    ];
+
+    /** Prefiks nomor akun uji Fase 5 (dibersihkan setiap kali fixture dijalankan). */
+    public const QC_INVESTOR_PREFIX = '0898%';
+
+    /**
+     * Baris `profit_distributions` tetap untuk mitra QC Fase 5.
+     *
+     * Tanggalnya **relatif terhadap hari ini** supaya "Dividen Bulan Ini" dapat
+     * diuji tanpa bergantung kalender: baris `-40` selalu di luar bulan
+     * berjalan, sisanya di dalamnya (kecuali bila hari ini tanggal 1–2 — dan
+     * untuk itu suite menghitung harapannya dari data, bukan dari angka mati).
+     */
+    public const QC_INVESTOR_ROUNDS = [
+        ['offset_days' => 0, 'utilized' => '6204264.71', 'profit' => '154341.18'],
+        ['offset_days' => -1, 'utilized' => '10000000.00', 'profit' => '100000.00'],
+        ['offset_days' => -2, 'utilized' => '14000000.00', 'profit' => '50000.00'],
+        ['offset_days' => -40, 'utilized' => '5000000.00', 'profit' => '75000.00'],
+    ];
+
+    /**
+     * Angka & nama "kanari" pada baris `daily_settlements`/`hulu_transactions`
+     * mitra QC. Semuanya **harus** tidak pernah muncul pada permukaan investor;
+     * suite Fase 5 mencarinya di HTML dasbor, laporan, dan CSV.
+     */
+    public const QC_CANARIES = [
+        'revenue'  => '37544000.00',
+        'operator' => '1749200.00',
+        'net'      => '2186500.00',
+        'grams'    => '18.050',
+        'alias'    => 'QC Kanari Penambang',
+    ];
+
+    /**
+     * Siapkan mitra QC Fase 5 yang SUDAH onboarding: akun + PIN aktif + dompet
+     * bermodal Rp 20 juta + empat putaran distribusi (lengkap dengan sesi
+     * settlement berisi angka kanari).
+     *
+     * Idempotent: seluruh distribusi, permohonan penarikan, sesi settlement,
+     * akun uji `0898…` lain, dan saldo dompet lain dinolkan lebih dulu — angka
+     * dasbor karena itu selalu sama di setiap jalankan.
+     *
+     * @param string|null $firstUtilized nilai `capital_utilized` putaran
+     *                                   terakhir (untuk menguji klamp)
+     * @return array<string, mixed>
+     */
+    public static function seedQcInvestor(?string $firstUtilized = null): array
+    {
+        self::ensureInstalled();
+
+        Database::query('DELETE FROM `profit_distributions`');
+        Database::query('DELETE FROM `withdrawal_requests`');
+        Database::query('DELETE FROM `daily_settlements`');
+        Database::query(
+            'DELETE FROM `hulu_transactions` WHERE `farmer_alias` = :alias',
+            ['alias' => self::QC_CANARIES['alias']]
+        );
+
+        self::purgeQcInvestorAccounts();
+
+        // Dompet lain dinetralkan: mereka tidak boleh muncul di dasbor mitra.
+        self::neutraliseWallets();
+
+        $user = User::findByPhoneNumber(self::QC_INVESTOR['phone'], false);
+
+        if ($user === null) {
+            $userId = User::create(
+                self::QC_INVESTOR['name'],
+                self::QC_INVESTOR['phone'],
+                Security::randomToken(32),
+                Constants::ROLE_INVESTOR
+            );
+        } else {
+            $userId = (string) $user['id'];
+        }
+
+        $wallet = CapitalWallet::findByUserId($userId);
+        $walletId = $wallet === null
+            ? CapitalWallet::insert($userId, self::QC_INVESTOR['tier'])
+            : (string) $wallet['id'];
+
+        $profitTotal = 0;
+
+        foreach (self::QC_INVESTOR_ROUNDS as $round) {
+            $profitTotal += (int) TellerService::moneyToCents($round['profit']);
+        }
+
+        self::setWalletState($walletId, self::QC_INVESTOR['capital'], self::canonicalCents($profitTotal), '0.00');
+
+        $rounds = [];
+
+        foreach (self::QC_INVESTOR_ROUNDS as $index => $round) {
+            $utilized = $index === 0 && $firstUtilized !== null ? $firstUtilized : $round['utilized'];
+            $settlementId = self::insertQcSettlement((int) $round['offset_days'], $utilized, $round['profit']);
+
+            Database::query(
+                'INSERT INTO `profit_distributions` '
+                . '(`id`, `settlement_id`, `wallet_id`, `capital_utilized`, `profit_earned`) '
+                . 'VALUES (:id, :settlement_id, :wallet_id, :utilized, :profit)',
+                [
+                    'id'            => Security::uuidV4(),
+                    'settlement_id' => $settlementId,
+                    'wallet_id'     => $walletId,
+                    'utilized'      => $utilized,
+                    'profit'        => $round['profit'],
+                ]
+            );
+
+            $rounds[] = [
+                'settlement_id' => $settlementId,
+                'date'          => date('Y-m-d', strtotime($round['offset_days'] . ' days')),
+                'utilized'      => $utilized,
+                'profit'        => $round['profit'],
+            ];
+        }
+
+        // Kanari hulu: satu kedatangan yang sudah disettle (tanpa settlement_id)
+        // supaya nama penambang + angka omzet benar-benar ada di basis data,
+        // lalu dibuktikan TIDAK pernah bocor ke permukaan investor.
+        Database::query(
+            'INSERT INTO `hulu_transactions` '
+            . '(`id`, `settlement_id`, `farmer_alias`, `dry_weight`, `buy_price_per_g`, '
+            . '`gross_tebus_total`, `flat_burn_fee`, `operator_burn_cut`, `consumable_cut`, '
+            . '`net_cash_paid`, `status`) VALUES '
+            . '(:id, NULL, :alias, :grams, 1950000.00, 35197500.00, 20000.00, 10000.00, 10000.00, 35177500.00, \'settled\')',
+            [
+                'id'    => Security::uuidV4(),
+                'alias' => self::QC_CANARIES['alias'],
+                'grams' => self::QC_CANARIES['grams'],
+            ]
+        );
+
+        // Mitra QC aktif: PIN ber-pepper siap dipakai, jejak audit terisi,
+        // tautan undangan sudah hangus (keadaan sesudah onboarding).
+        Database::update(
+            'users',
+            [
+                'role'                 => Constants::ROLE_INVESTOR,
+                'is_active'            => 1,
+                'password_hash'        => Security::hashPin(self::QC_INVESTOR['pin']),
+                'invite_token'         => null,
+                'onboarding_signed_at' => date('Y-m-d H:i:s'),
+                'signed_ip_address'    => '127.0.0.1',
+                'signed_user_agent'    => 'QC Fixture Fase 5',
+            ],
+            '`id` = :id',
+            ['id' => $userId]
+        );
+
+        PinThrottle::clearAll();
+
+        return [
+            'user_id'   => $userId,
+            'wallet_id' => $walletId,
+            'phone'     => self::QC_INVESTOR['phone'],
+            'name'      => self::QC_INVESTOR['name'],
+            'pin'       => self::QC_INVESTOR['pin'],
+            'capital'   => self::QC_INVESTOR['capital'],
+            'profit'    => self::canonicalCents($profitTotal),
+            'rounds'    => $rounds,
+        ];
+    }
+
+    /**
+     * Siapkan calon mitra QC Fase 5 yang BELUM onboarding: tautan undangan
+     * aktif, tanpa jejak tanda tangan, dan tanpa kredensial yang diketahui.
+     *
+     * Dipanggil setelah `seedQcInvestor()` (yang menetralkan seluruh dompet).
+     *
+     * @return array<string, mixed>
+     */
+    public static function seedQcInvitee(): array
+    {
+        $user = User::findByPhoneNumber(self::QC_INVITEE['phone'], false);
+
+        if ($user === null) {
+            $userId = User::create(
+                self::QC_INVITEE['name'],
+                self::QC_INVITEE['phone'],
+                Security::randomToken(32),
+                Constants::ROLE_INVESTOR
+            );
+        } else {
+            $userId = (string) $user['id'];
+        }
+
+        $wallet = CapitalWallet::findByUserId($userId);
+        $walletId = $wallet === null
+            ? CapitalWallet::insert($userId, self::QC_INVITEE['tier'])
+            : (string) $wallet['id'];
+
+        self::setWalletState($walletId, '0.00', '0.00', '0.00');
+
+        $inviteToken = Security::randomToken(32);
+
+        Database::update(
+            'users',
+            [
+                'role'                 => Constants::ROLE_INVESTOR,
+                'is_active'            => 1,
+                'password_hash'        => Security::hashPassword(Security::randomToken(32)),
+                'invite_token'         => $inviteToken,
+                'onboarding_signed_at' => null,
+                'signed_ip_address'    => null,
+                'signed_user_agent'    => null,
+            ],
+            '`id` = :id',
+            ['id' => $userId]
+        );
+
+        PinThrottle::clearAll();
+
+        return [
+            'user_id'      => $userId,
+            'wallet_id'    => $walletId,
+            'phone'        => self::QC_INVITEE['phone'],
+            'name'         => self::QC_INVITEE['name'],
+            'pin'          => self::QC_INVITEE['pin'],
+            'invite_token' => $inviteToken,
+        ];
+    }
+
+    /**
+     * Pulihkan keadaan mitra QC Fase 5 ke titik awal: mitra aktif + calon mitra
+     * menunggu, pembatas login kosong.
+     */
+    public static function resetInvestorState(): void
+    {
+        self::seedQcInvestor();
+        self::seedQcInvitee();
+        PinThrottle::clearAll();
+    }
+
+    /**
+     * Ringkasan keadaan mitra QC (untuk perbandingan sebelum/sesudah mutasi).
+     *
+     * @return array<string, mixed>
+     */
+    public static function investorSnapshot(?string $phone = null): array
+    {
+        $phone = $phone ?? self::QC_INVESTOR['phone'];
+        $user = User::findByPhoneNumber($phone, false);
+
+        if ($user === null) {
+            return ['found' => false, 'withdrawals' => 0, 'distributions' => 0];
+        }
+
+        $userId = (string) $user['id'];
+        $wallet = CapitalWallet::findByUserId($userId);
+        $walletId = (string) ($wallet['id'] ?? '');
+
+        // Kolom audit onboarding dibaca langsung: `User::findByPhoneNumber()`
+        // sengaja tidak membawa `invite_token` (tidak ada kebutuhan produksi),
+        // sedangkan fixture QC harus dapat membuktikannya utuh/hangus.
+        $audit = Database::fetchOne(
+            'SELECT `invite_token`, `onboarding_signed_at`, `signed_ip_address`, `signed_user_agent` '
+            . 'FROM `users` WHERE `id` = :id LIMIT 1',
+            ['id' => $userId]
+        );
+
+        $user['invite_token'] = $audit['invite_token'] ?? null;
+        $user['signed_ip_address'] = $audit['signed_ip_address'] ?? null;
+        $user['signed_user_agent'] = $audit['signed_user_agent'] ?? null;
+
+        return [
+            'found'    => true,
+            'user'     => $user,
+            'wallet'   => $wallet,
+            'withdrawals' => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `withdrawal_requests` WHERE `wallet_id` = :wallet_id',
+                ['wallet_id' => $walletId]
+            )['total'] ?? 0),
+            'distributions' => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `profit_distributions` WHERE `wallet_id` = :wallet_id',
+                ['wallet_id' => $walletId]
+            )['total'] ?? 0),
+        ];
+    }
+
+    /**
+     * Kosongkan direktori pembatas percobaan login.
+     */
+    public static function clearPinThrottle(): int
+    {
+        return PinThrottle::clearAll();
+    }
+
+    /**
+     * Hapus akun uji Fase 5 selain dua akun fixture, beserta dompetnya.
+     *
+     * Dompet dihapus lebih dulu karena `capital_wallets.user_id` memakai FK
+     * `ON DELETE RESTRICT` (ERD § 4).
+     */
+    private static function purgeQcInvestorAccounts(): void
+    {
+        $keep = [self::QC_INVESTOR['phone'], self::QC_INVITEE['phone']];
+
+        $rows = Database::fetchAll(
+            'SELECT `id`, `phone_number` FROM `users` WHERE `phone_number` LIKE :prefix',
+            ['prefix' => self::QC_INVESTOR_PREFIX]
+        );
+
+        foreach ($rows as $row) {
+            $phone = (string) $row['phone_number'];
+
+            if (in_array($phone, $keep, true)) {
+                continue;
+            }
+
+            $userId = (string) $row['id'];
+
+            Database::query('DELETE FROM `capital_wallets` WHERE `user_id` = :user_id', ['user_id' => $userId]);
+            Database::query('DELETE FROM `users` WHERE `id` = :user_id', ['user_id' => $userId]);
+        }
+    }
+
+    /**
+     * Sisipkan satu sesi settlement berisi angka "kanari" (omzet toko, hak
+     * pengelola, laba bersih, gramatur) yang harus tidak pernah terlihat mitra.
+     *
+     * @return string id sesi
+     */
+    private static function insertQcSettlement(int $offsetDays, string $utilized, string $profit): string
+    {
+        $id = Security::uuidV4();
+        $date = date('Y-m-d', strtotime($offsetDays . ' days'));
+
+        Database::query(
+            'INSERT INTO `daily_settlements` '
+            . '(`id`, `settlement_date`, `total_dry_grams`, `shop_water_density_pct`, `shop_price_per_g`, '
+            . '`total_shop_revenue`, `daily_coordination_fee`, `consumable_opex`, `deficit_recovery_used`, '
+            . '`net_settled_profit`, `operator_share_80`, `investor_pool_20`, `carryover_deficit`, '
+            . '`receipt_photo_url`) VALUES '
+            . '(:id, :date, :grams, NULL, 2080000.00, :revenue, 200000.00, 0.00, 0.00, :net, :operator, :pool, 0.00, NULL)',
+            [
+                'id'       => $id,
+                'date'     => $date,
+                'grams'    => self::QC_CANARIES['grams'],
+                'revenue'  => self::QC_CANARIES['revenue'],
+                'net'      => self::QC_CANARIES['net'],
+                'operator' => self::QC_CANARIES['operator'],
+                'pool'     => $profit,
+            ]
+        );
+
+        return $id;
+    }
+
+    /**
+     * Sen (integer) menjadi string desimal kanonik.
+     */
+    private static function canonicalCents(int $cents): string
+    {
+        return TellerService::centsToDecimal($cents);
     }
 }
 

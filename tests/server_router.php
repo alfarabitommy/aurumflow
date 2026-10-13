@@ -42,6 +42,18 @@ if (str_contains($path, '..') || preg_match('#(^|/)\.#', $path) === 1) {
 $candidate = $publicPath . str_replace('/', DIRECTORY_SEPARATOR, $path);
 $resolved = realpath($candidate);
 
+// 2b. Folder unggahan tidak boleh mengeksekusi skrip — meniru aturan
+//     public/uploads/.htaccess (server bawaan PHP tidak membacanya).
+if (preg_match('#^/uploads/#i', $path) === 1
+    && preg_match('/\.(php|php[0-9]?|phtml|phar|pht|shtml|pl|py|cgi|asp|aspx|jsp|sh)$/i', $path) === 1
+) {
+    http_response_code(403);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "403 Forbidden\n";
+
+    return true;
+}
+
 if ($resolved !== false
     && is_file($resolved)
     && str_starts_with($resolved, $publicPath . DIRECTORY_SEPARATOR)

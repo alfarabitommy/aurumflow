@@ -6,7 +6,7 @@ declare(strict_types=1);
 |--------------------------------------------------------------------------
 | QC-4 — Seed Reading & Integritas Skema ERD
 |--------------------------------------------------------------------------
-| Membuktikan bahwa DDL ERD diterapkan apa adanya: 9 tabel, konvensi tipe
+| Membuktikan bahwa DDL ERD diterapkan apa adanya: 10 tabel, konvensi tipe
 | data (DECIMAL(14,2) / DECIMAL(8,3) / DECIMAL(5,2)), primary key UUID
 | CHAR(36), seed system_settings lengkap, dan guard database/install.php.
 */
@@ -40,6 +40,7 @@ $erdTables = [
     'hulu_transactions',
     'profit_distributions',
     'withdrawal_requests',
+    'bridge_loans',
 ];
 
 // ---------------------------------------------------------------------------
@@ -190,6 +191,10 @@ $moneyExpectations = [
     ['hulu_transactions', 'flat_burn_fee', 14, 2],
     ['profit_distributions', 'profit_earned', 14, 2],
     ['withdrawal_requests', 'amount', 14, 2],
+    ['bridge_loans', 'principal_amount', 14, 2],
+    ['bridge_loans', 'fee_amount', 14, 2],
+    ['bridge_loans', 'fee_absorbed', 14, 2],
+    ['bridge_loans', 'fee_uncovered', 14, 2],
 ];
 
 $moneyViolations = QcFixture::checkDecimalConventions($moneyExpectations);
@@ -220,6 +225,7 @@ Qc::ok(
 $percentExpectations = [
     ['capital_wallets', 'locked_quota_pct', 5, 2],
     ['daily_settlements', 'shop_water_density_pct', 5, 2],
+    ['bridge_loans', 'fee_rate_pct', 5, 2],
 ];
 
 $percentViolations = QcFixture::checkDecimalConventions($percentExpectations);
@@ -665,7 +671,33 @@ Qc::ok(
 );
 
 // Pastikan tidak ada sisa data QC.
-Database::query('DELETE FROM `users` WHERE `full_name` LIKE :pattern', ['pattern' => '%QC%']);
+//
+// Urutannya penting sejak Fase 5: `capital_wallets.user_id`,
+// `withdrawal_requests.wallet_id`, dan `profit_distributions.wallet_id` memakai
+// FK ON DELETE RESTRICT (ERD § 4), sehingga baris anak harus dibuang lebih dulu
+// — pola yang sama dengan `QcFixture::purgeQcInvestorAccounts()`.
+$qcPattern = ['pattern' => '%QC%'];
+
+Database::query(
+    'DELETE FROM `profit_distributions` WHERE `wallet_id` IN ('
+    . 'SELECT `id` FROM `capital_wallets` WHERE `user_id` IN ('
+    . 'SELECT `id` FROM `users` WHERE `full_name` LIKE :pattern))',
+    $qcPattern
+);
+
+Database::query(
+    'DELETE FROM `withdrawal_requests` WHERE `wallet_id` IN ('
+    . 'SELECT `id` FROM `capital_wallets` WHERE `user_id` IN ('
+    . 'SELECT `id` FROM `users` WHERE `full_name` LIKE :pattern))',
+    $qcPattern
+);
+
+Database::query(
+    'DELETE FROM `capital_wallets` WHERE `user_id` IN (SELECT `id` FROM `users` WHERE `full_name` LIKE :pattern)',
+    $qcPattern
+);
+
+Database::query('DELETE FROM `users` WHERE `full_name` LIKE :pattern', $qcPattern);
 Database::query('DELETE FROM `cash_registers` WHERE `register_name` LIKE :pattern', ['pattern' => 'QC Probe%']);
 
 Qc::finish('qc_seed');

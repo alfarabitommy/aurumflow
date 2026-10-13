@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace AurumFlow\Controllers;
 
 use AurumFlow\Config\App;
+use AurumFlow\Config\Constants;
+use AurumFlow\Helpers\Security;
 
 /**
  * Induk seluruh controller.
@@ -15,6 +17,9 @@ use AurumFlow\Config\App;
  */
 abstract class BaseController
 {
+    /** Kunci session untuk pesan sekali pakai (flash message). */
+    private const FLASH_KEY = '_flash';
+
     /**
      * Penjaga re-entrancy untuk abort(): bila halaman error sendiri gagal
      * dirender, jangan pernah mencoba merender lagi.
@@ -24,6 +29,9 @@ abstract class BaseController
     /**
      * Render view di dalam layout.
      *
+     * Pesan flash (bila ada) diambil sekali pakai dan diteruskan ke layout
+     * sebagai `$flash` — pola POST-Redirect-GET.
+     *
      * @param array<string, mixed> $data
      */
     protected function render(string $view, array $data = [], string $layout = 'app'): void
@@ -32,6 +40,7 @@ abstract class BaseController
         $layoutFile = self::resolveView('layouts/' . $layout);
 
         $data['app_name'] = App::name();
+        $data['flash'] = $this->takeFlash();
 
         extract($data, EXTR_SKIP);
 
@@ -70,8 +79,54 @@ abstract class BaseController
     protected function requireGuest(): void
     {
         if (isset($_SESSION['user_id'])) {
-            $this->redirect('/dashboard');
+            $this->redirect(self::roleLandingPath((string) ($_SESSION['user_role'] ?? '')));
         }
+    }
+
+    /**
+     * Halaman hanya untuk peran tertentu (lihat `Constants::ROLE_*`).
+     *
+     * Pelanggar diarahkan ke **beranda perannya**, bukan diberi halaman error —
+     * sesuai ekspektasi "Akses URL Kasir Ilegal" pada Protokol QC Manual 5.
+     * Sejak Fase 5 tujuan itu bergantung peran: seorang mitra yang membuka
+     * `/operator/*` atau `/dashboard` (yang memuat `system_settings`) harus
+     * mendarat di dasbornya sendiri, bukan di halaman internal pengelola.
+     */
+    protected function requireRole(string ...$roles): void
+    {
+        $this->requireAuth();
+
+        $role = isset($_SESSION['user_role']) ? (string) $_SESSION['user_role'] : '';
+
+        if (!in_array($role, $roles, true)) {
+            $this->redirect(self::roleLandingPath($role));
+        }
+    }
+
+    /**
+     * Beranda per peran — SATU-SATUNYA pemetaan peran → tujuan pengalihan.
+     *
+     * Dipakai `requireRole()`, `requireGuest()`, `AuthController::login()`,
+     * `AuthController::logout()`, dan `DashboardController::home()` supaya
+     * tidak ada dua tempat yang dapat berbeda pendapat tentang "rumah" sebuah
+     * peran. Peran tak dikenal (sesi rusak) diperlakukan seperti operator,
+     * sehingga `/dashboard` yang sudah operator-only akan mengalihkannya lagi.
+     */
+    public static function roleLandingPath(string $role): string
+    {
+        return $role === Constants::ROLE_INVESTOR ? '/investor/dashboard' : '/dashboard';
+    }
+
+    /**
+     * Simpan pesan sekali pakai untuk halaman berikutnya (POST-Redirect-GET).
+     */
+    protected function flash(string $kind, string $message): void
+    {
+        if (!Security::sessionIsActive()) {
+            return;
+        }
+
+        $_SESSION[self::FLASH_KEY] = ['kind' => $kind, 'message' => $message];
     }
 
     /**
@@ -125,6 +180,37 @@ abstract class BaseController
         }
 
         exit(1);
+    }
+
+    /**
+     * Ambil pesan flash sekali pakai. Selalu mengembalikan bentuk yang sama
+     * supaya view tidak perlu memeriksa keberadaan kunci.
+     *
+     * @return array{kind: string, message: string}
+     */
+    private function takeFlash(): array
+    {
+        $empty = ['kind' => 'info', 'message' => ''];
+
+        if (!Security::sessionIsActive()) {
+            return $empty;
+        }
+
+        $flash = $_SESSION[self::FLASH_KEY] ?? null;
+        unset($_SESSION[self::FLASH_KEY]);
+
+        if (!is_array($flash)) {
+            return $empty;
+        }
+
+        $message = isset($flash['message']) && is_string($flash['message']) ? $flash['message'] : '';
+        $kind = isset($flash['kind']) && is_string($flash['kind']) ? $flash['kind'] : 'info';
+
+        if ($message === '') {
+            return $empty;
+        }
+
+        return ['kind' => $kind, 'message' => $message];
     }
 
     /**

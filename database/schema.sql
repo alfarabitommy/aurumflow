@@ -230,3 +230,44 @@ CREATE TABLE IF NOT EXISTS `withdrawal_requests` (
     CONSTRAINT `fk_withdraw_wallet` FOREIGN KEY (`wallet_id`) REFERENCES `capital_wallets` (`id`)
         ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 10. bridge_loans — dana talangan operasional (Fase 6)
+-- ----------------------------------------------------------------------------
+-- Pinjaman kas tunai jangka pendek dari pihak LUAR (tanpa akun) untuk menutup
+-- kas Meja Bakar yang habis pada malam hari. Pokok dikembalikan bersama fee
+-- flat satu siklus (T+1) pada tutup buku siang berikutnya.
+--
+-- Aturan yang tidak boleh dilanggar (PRD § 3.5):
+--   * Pokok BUKAN pendapatan — tidak pernah menyentuh `daily_settlements`.
+--   * Fee diserap HANYA dari `daily_settlements.operator_share_80`;
+--     `investor_pool_20` dan `capital_wallets.balance_profit` tidak pernah
+--     terpengaruh adanya talangan.
+--   * `fee_absorbed + fee_uncovered = fee_amount`, `fee_absorbed <= hak pengelola`.
+--   * Sejak Fase 6 tutup buku menulis TUJUH kelompok tulisan; tabel ini adalah
+--     kelompok ketujuh (lihat AGENTS.md).
+CREATE TABLE IF NOT EXISTS `bridge_loans` (
+    `id`               CHAR(36)      NOT NULL,
+    `lender_name`      VARCHAR(50)   NOT NULL COMMENT 'Nama/alias pemberi dana (tanpa akun)',
+    `principal_amount` DECIMAL(14,2) NOT NULL COMMENT 'Pokok yang diterima meja kas',
+    `fee_type`         ENUM('pct', 'fixed') NOT NULL COMMENT 'Bentuk fee yang disepakati',
+    `fee_rate_pct`     DECIMAL(5,2)  NULL COMMENT 'Terisi HANYA bila fee_type = pct',
+    `fee_amount`       DECIMAL(14,2) NOT NULL COMMENT 'Fee hasil hitung peladen (kanonik)',
+    `fee_absorbed`     DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Porsi fee diserap hak pengelola',
+    `fee_uncovered`    DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Porsi fee melebihi hak pengelola (kas kerja pengelola)',
+    `status`           ENUM('active', 'settled') NOT NULL DEFAULT 'active',
+    `settlement_id`    CHAR(36)      NULL COMMENT 'Sesi tutup buku yang mengembalikannya',
+    `register_id`      CHAR(36)      NOT NULL COMMENT 'Pos kas penerima dana',
+    `received_at`      DATETIME      NOT NULL COMMENT 'Waktu penerimaan (jam peladen)',
+    `notes`            TEXT          NULL,
+    `created_at`       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at`       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_bridge_status_created` (`status`, `created_at`),
+    KEY `idx_bridge_settlement` (`settlement_id`),
+    KEY `idx_bridge_register` (`register_id`),
+    CONSTRAINT `fk_bridge_settlement` FOREIGN KEY (`settlement_id`) REFERENCES `daily_settlements` (`id`)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `fk_bridge_register` FOREIGN KEY (`register_id`) REFERENCES `cash_registers` (`id`)
+        ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

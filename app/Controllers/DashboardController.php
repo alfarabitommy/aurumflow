@@ -38,15 +38,24 @@ final class DashboardController extends BaseController
     public function home(): void
     {
         if (isset($_SESSION['user_id'])) {
-            $this->redirect('/dashboard');
+            $this->redirect(self::roleLandingPath((string) ($_SESSION['user_role'] ?? '')));
         }
 
         $this->redirect('/login');
     }
 
+    /**
+     * Ringkasan operasional — **hanya untuk peran `operator`**.
+     *
+     * Halaman ini menampilkan isi `system_settings` (mode alokasi, kuota dasar
+     * pengelola, defisit berjalan) yang tidak boleh dilihat mitra pemodal.
+     * Sejak Fase 5 seorang mitra yang membuka `/dashboard` diarahkan ke
+     * `/investor/dashboard` oleh `requireRole()` — bukan diberi halaman error
+     * dan tidak pernah melihat satu angka pun dari halaman ini.
+     */
     public function index(): void
     {
-        $this->requireAuth();
+        $this->requireRole(Constants::ROLE_OPERATOR);
 
         $role = (string) ($_SESSION['user_role'] ?? '');
 

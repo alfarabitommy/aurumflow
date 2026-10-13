@@ -43,7 +43,19 @@
 
        ┌────────────────────────┐       1..N ┌────────────────────────┐
        │     CASH_REGISTERS     ├───────────►│     CASH_MUTATIONS     │
-       └────────────────────────┘            └────────────────────────┘
+       └───────────┬────────────┘            └────────────────────────┘
+                   │ 1
+                   │
+                   │ 1..N
+       ┌───────────▼────────────┐
+       │      BRIDGE_LOANS      │  (dana talangan operasional — Fase 6)
+       └───────────▲────────────┘
+                   │ 1..N
+                   │
+                   │ 0..1
+       ┌───────────┴────────────┐
+       │   DAILY_SETTLEMENTS    │
+       └────────────────────────┘
 ```
 
 ---
@@ -58,6 +70,8 @@
 | `daily_settlements` → `profit_distributions` | 1 : N | Satu sesi penutupan buku mendistribusikan dividen ke banyak dompet pemodal yang modalnya terserap putaran tersebut. |
 | `capital_wallets` → `profit_distributions` | 1 : N | Satu dompet modal menerima akumulasi dividen dari berbagai sesi *settlement*. |
 | `cash_registers` → `cash_mutations` | 1 : N | Pos kas fisik (meja bakar atau brankas utama) mencatat seluruh riwayat mutasi masuk/keluar. |
+| `cash_registers` → `bridge_loans` | 1 : N | Pos kas penerima dana talangan. Pengembalian selalu keluar dari pos yang sama (`Kas Meja Bakar`), karena dana talangan hanya **melintas** di kas operasional. |
+| `daily_settlements` → `bridge_loans` | 1 : N | Satu sesi tutup buku mengembalikan pokok + fee seluruh dana talangan yang masih `active` (urutan FIFO). Baris talangan menyimpan `settlement_id` sebagai jejak audit pengembaliannya. |
 
 ---
 
@@ -249,7 +263,42 @@ CREATE TABLE withdrawal_requests (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
--- 10. DATA INISIALISASI DASAR (SEED DATA)
+-- 10. TABEL DANA TALANGAN OPERASIONAL (BRIDGE_LOANS)
+-- =====================================================================
+-- Pinjaman kas tunai jangka pendek dari pihak LUAR (tanpa akun) untuk menutup
+-- kas Meja Bakar yang habis pada malam hari. Pokok dikembalikan bersama fee
+-- flat satu siklus (T+1) pada tutup buku siang berikutnya.
+--
+-- Aturan yang tidak boleh dilanggar (PRD § 3.5):
+--   * Pokok BUKAN pendapatan — tidak pernah menyentuh daily_settlements.
+--   * Fee diserap HANYA dari porsi hak Pengelola (operator_share_80);
+--     investor_pool_20 dan balance_profit mitra tidak pernah terpengaruh.
+--   * fee_absorbed + fee_uncovered = fee_amount; fee_absorbed <= hak pengelola.
+CREATE TABLE bridge_loans (
+    id CHAR(36) NOT NULL PRIMARY KEY,
+    lender_name VARCHAR(50) NOT NULL COMMENT 'Nama/alias pemberi dana (tanpa akun)',
+    principal_amount DECIMAL(14,2) NOT NULL COMMENT 'Pokok yang diterima meja kas',
+    fee_type ENUM('pct', 'fixed') NOT NULL COMMENT 'Bentuk fee yang disepakati',
+    fee_rate_pct DECIMAL(5,2) NULL COMMENT 'Terisi HANYA bila fee_type = pct',
+    fee_amount DECIMAL(14,2) NOT NULL COMMENT 'Fee hasil hitung peladen (kanonik)',
+    fee_absorbed DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Porsi fee yang diserap hak Pengelola',
+    fee_uncovered DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Porsi fee melebihi hak Pengelola (kas kerja Pengelola)',
+    status ENUM('active', 'settled') NOT NULL DEFAULT 'active',
+    settlement_id CHAR(36) NULL COMMENT 'Sesi tutup buku yang mengembalikannya',
+    register_id CHAR(36) NOT NULL COMMENT 'Pos kas penerima dana',
+    received_at DATETIME NOT NULL COMMENT 'Waktu penerimaan (jam peladen)',
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_bridge_settlement FOREIGN KEY (settlement_id) REFERENCES daily_settlements (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_bridge_register FOREIGN KEY (register_id) REFERENCES cash_registers (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    INDEX idx_bridge_status_created (status, created_at),
+    INDEX idx_bridge_settlement (settlement_id),
+    INDEX idx_bridge_register (register_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 11. DATA INISIALISASI DASAR (SEED DATA)
 -- =====================================================================
 
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES
@@ -272,3 +321,7 @@ INSERT INTO cash_registers (id, register_name, current_balance) VALUES
 1. **Jaminan Integritas Saldo:** Relasi *Foreign Key* pada `users`, `capital_wallets`, dan `daily_settlements` menggunakan aturan `ON DELETE RESTRICT` untuk mencegah terhapusnya data pembukuan historis.
 2. **Kinerja Kasir Hulu:** Indeks komposit pada `hulu_transactions(status, created_at)` memastikan kueri saat penutupan buku harian berlangsung cepat tanpa pembacaan penuh (*full-table scan*).
 3. **Format Kunci UUID:** Kolom `CHAR(36)` memastikan kompabilitas langsung dengan fungsi bawaan PHP `bin2hex(random_bytes(16))` maupun `UUID()` bawaan MySQL di lingkungan shared hosting.
+4. **Kinerja Jembatan Likuiditas (Fase 6):** Indeks komposit `bridge_loans(status, created_at)`
+   melayani satu-satunya jalur baca terpanas tabel itu — "talangan aktif, urutan FIFO"
+   (`WHERE status = 'active' ORDER BY created_at ASC, id ASC`) — yang dijalankan **setiap** sesi
+   tutup buku dan setiap render Layar B/C, sehingga tidak ada pembacaan penuh tabel.

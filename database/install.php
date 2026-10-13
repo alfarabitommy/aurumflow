@@ -33,6 +33,7 @@ use AurumFlow\Config\Database;
 use AurumFlow\Config\DatabaseException;
 use AurumFlow\Config\Env;
 use AurumFlow\Helpers\Security;
+use AurumFlow\Models\CapitalWallet;
 use AurumFlow\Models\User;
 
 require dirname(__DIR__) . '/app/Config/bootstrap.php';
@@ -146,39 +147,51 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Siapkan akun operator + verifikasi pos kas (atomik)
+// 6. Siapkan akun operator + dompet Pengelola + verifikasi pos kas (atomik)
 // ---------------------------------------------------------------------------
-// Dibungkus satu transaksi: membuat akun operator dan memastikan pos kas
-// tersedia adalah satu unit penyiapan. Bila salah satu gagal, tidak boleh
-// ada kondisi setengah jadi. (SAD § 4.1 mewajibkan transaksi PDO untuk
-// operasi yang menyentuh kas.)
+// Dibungkus satu transaksi: membuat akun operator, menyiapkan dompet modalnya,
+// dan memastikan pos kas tersedia adalah satu unit penyiapan. Bila salah satu
+// gagal, tidak boleh ada kondisi setengah jadi. (SAD § 4.1 mewajibkan transaksi
+// PDO untuk operasi yang menyentuh kas.)
+//
+// Dompet Pengelola (tier `operator`) adalah rumah prioritas serapan modal 50 %
+// pada mesin alokasi Fase 4; tanpa dompet ini pencatatan serapan modal Pengelola
+// tidak punya tempat. `ensureOperatorWallet()` idempotent sehingga instalasi
+// ulang tidak membuat dompet ganda.
 try {
     $operatorAction = Database::transaction(static function () use (
         $operatorName,
         $operatorPhone,
         $operatorPassword
-    ): string {
+    ): array {
         $existing = User::findByPhoneNumber($operatorPhone, false);
 
         if ($existing === null) {
-            $id = User::create($operatorName, $operatorPhone, $operatorPassword, Constants::ROLE_OPERATOR);
+            $operatorId = User::create($operatorName, $operatorPhone, $operatorPassword, Constants::ROLE_OPERATOR);
+            $action = 'dibuat';
+        } else {
+            $operatorId = (string) $existing['id'];
 
-            return 'dibuat (id ' . $id . ')';
+            Database::update(
+                'users',
+                [
+                    'full_name'     => $operatorName,
+                    'password_hash' => Security::hashPassword($operatorPassword),
+                    'role'          => Constants::ROLE_OPERATOR,
+                    'is_active'     => 1,
+                ],
+                '`id` = :id',
+                ['id' => $operatorId]
+            );
+
+            $action = 'diperbarui';
         }
 
-        Database::update(
-            'users',
-            [
-                'full_name'     => $operatorName,
-                'password_hash' => Security::hashPassword($operatorPassword),
-                'role'          => Constants::ROLE_OPERATOR,
-                'is_active'     => 1,
-            ],
-            '`id` = :id',
-            ['id' => (string) $existing['id']]
-        );
-
-        return 'diperbarui (id ' . $existing['id'] . ')';
+        return [
+            'action'    => $action,
+            'user_id'   => $operatorId,
+            'wallet_id' => CapitalWallet::ensureOperatorWallet($operatorId),
+        ];
     });
 
     $registerRow = Database::fetchOne('SELECT COUNT(*) AS `total` FROM `cash_registers`');
@@ -235,7 +248,9 @@ $respond(
     . 'Schema     : ' . $schemaCount . " statement\n"
     . 'Seed       : ' . $seedCount . " statement\n"
     . 'Pos kas    : ' . $registerCount . " baris\n"
-    . 'Akun operator : ' . $operatorPhone . ' -> ' . $operatorAction . "\n"
+    . 'Akun operator : ' . $operatorPhone . ' -> ' . $operatorAction['action']
+    . ' (id ' . $operatorAction['user_id'] . ")\n"
+    . 'Dompet Pengelola : ' . $operatorAction['wallet_id'] . " (tier operator)\n"
     . "Password awal wajib diganti setelah login pertama.\n\n"
     . "TINDAK LANJUT WAJIB:\n"
     . "  1. HAPUS file database/install.php dari hosting.\n"
