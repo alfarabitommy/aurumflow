@@ -1,0 +1,4 @@
+# Isi folder ini diabaikan oleh git (foto nota = data operasional).
+# Lihat juga: ../.htaccess (folder upload tidak boleh mengeksekusi skrip).
+*
+!.gitignore
