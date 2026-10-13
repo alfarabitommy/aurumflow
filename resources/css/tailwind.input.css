@@ -1,0 +1,214 @@
+/* ============================================================================
+   AurumFlow — sumber Tailwind (Fase 2)
+   ============================================================================
+   Sumber kebenaran tampilan: docs/AurumFlow UI UX Documents.md § 1
+   ("Obsidian Gold" — Private WealthTech & Dark Obsidian Luxury).
+
+   File ini TIDAK disajikan ke peramban. Ia dikompilasi di mesin pengembang:
+
+     npx --yes tailwindcss@3.4.19 \
+       -c tailwind.config.js \
+       -i resources/css/tailwind.input.css \
+       -o public/assets/css/app.min.css --minify
+
+   Hasilnya (public/assets/css/app.min.css) di-commit sehingga server shared
+   hosting tidak memerlukan Node.js (SAD § 2). Direktori `resources/` ditolak
+   oleh .htaccess tingkat proyek.
+   ========================================================================= */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ----------------------------------------------------------------------------
+   Tipografi — self-host (tanpa CDN: lokasi lapangan bersinyal lemah).
+   URL relatif terhadap berkas CSS hasil build (public/assets/css/), sehingga
+   tetap benar bila aplikasi dipasang pada subdirektori.
+   ---------------------------------------------------------------------------- */
+
+@font-face {
+    font-family: 'Plus Jakarta Sans';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/plus-jakarta-sans-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Plus Jakarta Sans';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('../fonts/plus-jakarta-sans-latin-600-normal.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Plus Jakarta Sans';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('../fonts/plus-jakarta-sans-latin-700-normal.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('../fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('../fonts/jetbrains-mono-latin-700-normal.woff2') format('woff2');
+}
+
+/* ----------------------------------------------------------------------------
+   Lapisan dasar
+   ---------------------------------------------------------------------------- */
+
+@layer base {
+    :root {
+        --af-obsidian-950: #07080B;
+        --af-surface-900: #0F1117;
+        --af-surface-800: #181C26;
+        --af-gold-primary: #D4AF37;
+        --af-gold-glow: #F3E5AB;
+        --af-emerald-cash: #10B981;
+        --af-text-pure: #F8FAFC;
+        --af-text-muted: #94A3B8;
+
+        /* Target sentuh minimum untuk operasi satu tangan (UI/UX § 2.1). */
+        --af-touch-target: 52px;
+    }
+
+    html {
+        -webkit-text-size-adjust: 100%;
+    }
+
+    /* Elemen ber-atribut x-cloak disembunyikan sampai Alpine.js siap
+       (mencegah kedipan konten yang bergantung pada state Alpine). */
+    [x-cloak] {
+        display: none !important;
+    }
+
+    body {
+        @apply bg-obsidian-950 font-sans text-pure antialiased;
+    }
+
+    ::selection {
+        @apply bg-gold-primary/30 text-pure;
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+        font: inherit;
+    }
+}
+
+/* ----------------------------------------------------------------------------
+   Lapisan komponen — primitif yang dipakai berulang di seluruh view.
+   Nilai tetap memakai utilias Tailwind agar tidak ada warna hardcoded baru.
+   ---------------------------------------------------------------------------- */
+
+@layer components {
+    .af-card {
+        @apply relative overflow-hidden rounded-2xl border border-gold-primary/20 bg-surface-900/90 p-5 shadow-luxury backdrop-blur-xl;
+    }
+
+    .af-card__title {
+        @apply text-lg font-bold tracking-tight text-pure;
+    }
+
+    .af-card__subtitle {
+        @apply mt-1 text-sm text-muted;
+    }
+
+    .af-glow {
+        @apply pointer-events-none absolute -right-10 -top-10 h-36 w-36 rounded-full bg-gold-primary/10 blur-3xl;
+    }
+
+    .af-label {
+        @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted;
+    }
+
+    .af-input {
+        @apply block w-full min-h-touch rounded-xl border border-surface-800 bg-surface-800 px-4 py-3 font-mono text-2xl tabular-nums text-pure shadow-inner outline-none transition placeholder:text-muted/50 focus:border-gold-primary focus:ring-2 focus:ring-gold-primary/30;
+    }
+
+    .af-input--sm {
+        @apply font-sans text-base;
+    }
+
+    .af-btn {
+        @apply inline-flex min-h-touch cursor-pointer select-none items-center justify-center gap-2 rounded-xl border border-transparent px-5 text-sm font-semibold tracking-wide transition;
+    }
+
+    .af-btn--primary {
+        @apply bg-gold-primary text-obsidian-950 hover:bg-gold-glow;
+    }
+
+    .af-btn--ghost {
+        @apply border-surface-800 text-pure hover:border-gold-primary/40 hover:text-gold-primary;
+    }
+
+    .af-btn--block {
+        @apply w-full;
+    }
+
+    .af-btn[disabled] {
+        @apply cursor-progress opacity-60;
+    }
+
+    .af-alert {
+        @apply mb-4 rounded-xl border px-4 py-3 text-sm;
+    }
+
+    .af-alert--error {
+        @apply border-red-500/40 bg-red-500/10 text-red-200;
+    }
+
+    .af-alert--success {
+        @apply border-emerald-cash/40 bg-emerald-cash/10 text-emerald-cash;
+    }
+
+    .af-alert--info {
+        @apply border-gold-primary/30 bg-gold-primary/10 text-gold-glow;
+    }
+
+    /* Angka finansial & timbangan: lebar digit seragam sehingga tidak bergeser
+       saat nilai diperbarui (UI/UX § 1.1). */
+    .af-num {
+        @apply font-mono tabular-nums;
+    }
+
+    .af-table {
+        @apply w-full border-collapse text-sm;
+    }
+
+    .af-table th,
+    .af-table td {
+        @apply border-b border-surface-800 px-3 py-2 text-left align-top;
+    }
+
+    .af-table th {
+        @apply text-xs font-semibold uppercase tracking-wider text-muted;
+    }
+
+    .af-facts {
+        @apply grid grid-cols-2 gap-3 sm:grid-cols-3;
+    }
+
+    .af-facts dt {
+        @apply text-xs font-semibold uppercase tracking-wider text-muted;
+    }
+
+    .af-facts dd {
+        @apply mt-0.5 font-semibold text-pure;
+    }
+}
