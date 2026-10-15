@@ -135,6 +135,12 @@ Layar kerja utama operator di samping timbangan digital.
 
 * **Reaktivitas Alpine.js:** Saat digit gram atau harga diubah, angka "TOTAL KAS BERSIH KELUAR" langsung terhitung seketika tanpa jeda reload halaman.
 
+> **Catatan Fase 7 — Layar B dipakai dua peran.** Layar ini adalah satu-satunya permukaan yang
+> boleh dibuka **kasir** (lihat § 7). Bagi kasir, navbar hanya memuat menu **Kasir** + **Keluar**,
+> tombol **Dashboard** tidak dirender, dan kartu/header hanya menampilkan saldo **Kas Meja Bakar**
+> serta Emas *holding* — `Brankas Utama` tidak pernah muncul di markup. Judul header tetap
+> "AURUMFLOW · Meja Hulu" agar kasir tidak perlu menyesuaikan kebiasaan kerja.
+
 ---
 
 ### Layar B2: Modal "Terima Dana Talangan" (Bridge Liquidity — Fase 6)
@@ -567,3 +573,82 @@ sekali pakai**, sedangkan layar ini adalah **pintu masuk harian** mitra.
 > persis jenis kesalahan yang dihindari "blind dashboard". Karena itu service worker
 > **tidak pernah** men-cache HTML, JSON, atau CSV: yang boleh hidup offline hanya
 > kerangka tampilan (CSS, font, skrip, ikon).
+
+---
+
+## 7. Peran Kasir Meja Bakar & Isolasi Tampilan (Fase 7)
+
+### 7.1 Layar A3: Pintu PIN Kasir (`/cashier/login`)
+
+Permukaan masuk baru bagi **kasir meja bakar** — orang yang menjaga timbangan malam, bukan pemilik
+pembukuan. Bentuknya sengaja identik dengan Layar A2 (pintu PIN mitra) supaya kasir cukup sekali
+belajar, tetapi kredensial, gerbang peran, dan berandanya berbeda.
+
+```
+┌──────────────────────────────────────┐
+│           AURUMFLOW                  │
+│    Private Wealth Management         │
+│  ──────────────────────────────────  │
+│  Nomor Telepon                       │
+│  [ mis. 081234567890        ]        │
+│                                      │
+│  PIN 6 Angka                         │
+│  [ ••••••                   ]        │
+│                                      │
+│  [ 1 ] [ 2 ] [ 3 ]                   │  <- Papan angka (x-cloak)
+│  [ 4 ] [ 5 ] [ 6 ]                   │
+│  [ 7 ] [ 8 ] [ 9 ]                   │
+│  [     ] [ 0 ] [ ⌫ ]                 │
+│                                      │
+│  ┌────────────────────────────────┐  │
+│  │      MASUK MEJA KASIR          │  │
+│  └────────────────────────────────┘  │
+│                                      │
+│  PIN terkunci atau lupa?             │
+│  Hubungi pengelola.                  │
+└──────────────────────────────────────┘
+```
+
+| Aspek | Nilai |
+| :--- | :--- |
+| Route | `GET /cashier/login` (form) & `POST /cashier/login` (mutasi, CSRF wajib) |
+| Field | `phone_number` (`type="tel"`) + `pin` (`type="password"`, `inputmode="numeric"`, `maxlength="6"`, `autocomplete="off"`) |
+| Papan angka | Komponen Alpine **`investorLogin`** yang sudah terdaftar sejak Fase 5 — **bukan** komponen `Alpine.data()` baru, sehingga aset `app.js` yang ter-cache peramban tidak dapat membuat papan angka/tombol hilang (aturan `AGENTS.md`) |
+| Gerbang peran | Hanya akun `role = cashier`; operator/mitra dijawab pesan generik `401` |
+| Pesan gagal | Selalu generik: "Nomor telepon atau PIN salah." |
+| Pembatasan percobaan | 5 kegagalan → kunci 15 menit per kombinasi nomor + IP (`PinThrottle`), dipakai bersama pintu mitra |
+| Beranda sesudah masuk | `/operator/teller` (Meja Kasir) |
+| Nilai awal | Nomor telepon dikembalikan peladen pada percobaan gagal; **PIN tidak pernah** dirender (tidak ada `value` pada field PIN) |
+
+### 7.2 Navigasi sadar peran (`layouts/operator.php`)
+
+| Elemen | Operator | Kasir |
+| :--- | :---: | :---: |
+| Menu **Kasir** (`/operator/teller`) | ✅ | ✅ |
+| Menu **Rekonsiliasi** (`/operator/settlement`) | ✅ | ⛔ disembunyikan |
+| Menu **Kelola Modal** (`/operator/capital`) | ✅ | ⛔ disembunyikan |
+| Menu **Kelola Kasir** (`/operator/kasir`) | ✅ | ⛔ disembunyikan |
+| Tombol **Dashboard** di header | ✅ | ⛔ disembunyikan |
+| Label identitas di header | nama + "Pengelola (Operator)" | nama + "Kasir Meja Bakar" |
+| Widget sticky header | Saldo Kas Meja Bakar + Emas holding | idem (tanpa Brankas) |
+| Tombol **Keluar** | ✅ | ✅ |
+
+Penyembunyian ini **kosmetik, bukan pengaman**: rute terlarang tetap dijaga peladen dan menjawab
+`302` ke `/operator/teller` tanpa tulisan.
+
+### 7.3 Data yang tidak boleh muncul di permukaan kasir
+
+`Brankas Utama` (nama maupun saldo), laba bersih / `pool mitra` / omzet, dompet serta identitas
+mitra, dan angka `system_settings` (mode alokasi, kuota 50 %, defisit berjalan). Daftar terlarang
+lengkapnya ada di `AGENTS.md`; penerapannya dibuktikan `tests/qc_fase_7.php` (grup E) dengan
+kanari angka, bukan hanya pemindaian markup.
+
+### 7.4 Layar "Kelola Kasir" (`/operator/kasir`) — khusus operator
+
+| Blok | Isi |
+| :--- | :--- |
+| Buat akun kasir | Nama, nomor telepon, PIN 6 digit + konfirmasi (`type="password"`, `inputmode="numeric"`), tombol kirim |
+| Daftar kasir | Nama, nomor, status (Aktif/Nonaktif), `updated_at`, tombol **Reset PIN** dan **Aktifkan/Nonaktifkan** (form POST terpisah + `data-confirm`) |
+| Kebijakan PIN | Dipakai ulang dari `OnboardingService::pinPolicy()` — PIN lemah ditolak dengan pesan yang sama seperti pembuatan PIN mitra |
+| Kerahasiaan | PIN tidak pernah dirender kembali (tidak ada kolom terisi); flash hanya menyebut nama/nomor |
+| Aturan form | Sama dengan Layar B/C: nilai awal dari peladen, placeholder contoh berawalan `mis. `, kontrol form **tidak pernah** `:disabled` |

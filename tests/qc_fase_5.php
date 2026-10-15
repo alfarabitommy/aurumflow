@@ -143,7 +143,7 @@ function qc5_all_view_files(): array
 {
     $files = [];
 
-    foreach (['layouts', 'auth', 'dashboard', 'investor', 'operator', 'errors'] as $folder) {
+    foreach (['layouts', 'auth', 'cashier', 'dashboard', 'investor', 'operator', 'errors'] as $folder) {
         foreach (glob(VIEW_PATH . '/' . $folder . '/*.php') ?: [] as $path) {
             $files[] = 'app/Views/' . $folder . '/' . basename($path);
         }
@@ -1983,6 +1983,7 @@ Qc::ok(
             'investor/login.php'      => 'auth.php',     // x-data, x-for, x-text
             'investor/onboarding.php' => 'auth.php',     // x-data, @submit, @scroll
             'investor/dashboard.php'  => 'investor.php', // x-data, x-model
+            'cashier/login.php'       => 'auth.php',     // Fase 7: pintu PIN kasir (x-data, x-cloak)
             'auth/login.php'          => 'auth.php',     // tanpa direktif: pemetaan tetap aman
         ];
 

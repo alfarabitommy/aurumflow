@@ -60,16 +60,20 @@ CREATE TABLE IF NOT EXISTS `system_settings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
--- 2. users — pengguna (operator & investor)
+-- 2. users — pengguna (operator, investor, & kasir)
 -- ----------------------------------------------------------------------------
 -- Identitas login adalah `phone_number` (bukan username/email).
 -- Kolom audit waiver menyimpan jejak persetujuan digital (clickwrap agreement).
+-- Sejak Fase 7 ada tiga peran. ATURAN: nilai ENUM hanya boleh DITAMBAHKAN DI
+-- UJUNG daftar (MySQL/MariaDB menyimpan ENUM sebagai indeks ordinal, sehingga
+-- penyisipan di tengah memetakan ulang arti baris yang sudah ada); instalasi
+-- lama menjalankan `php database/migrate.php` yang menjaga aturan itu.
 CREATE TABLE IF NOT EXISTS `users` (
     `id`                   CHAR(36)     NOT NULL,
     `full_name`            VARCHAR(100) NOT NULL,
     `phone_number`         VARCHAR(20)  NOT NULL,
     `password_hash`        VARCHAR(255) NOT NULL,
-    `role`                 ENUM('operator', 'investor') NOT NULL DEFAULT 'investor',
+    `role`                 ENUM('operator', 'investor', 'cashier') NOT NULL DEFAULT 'investor',
     `invite_token`         VARCHAR(64)  NULL,
     `is_active`            TINYINT(1)   NOT NULL DEFAULT 1,
 

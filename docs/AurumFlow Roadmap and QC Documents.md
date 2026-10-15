@@ -36,6 +36,9 @@ Parameter data uji (*test data*) pada setiap fase telah disiapkan secara eksplis
     │
     ▼
 [FASE 6B] Uji Simulasi End-to-End & Deployment Shared Hosting
+    │
+    ▼
+[FASE 7] Modul Kasir Meja Bakar (Strict Role Separation)
 ```
 
 ---
@@ -353,6 +356,45 @@ Lakukan verifikasi berikut langsung pada domain/subdomain aktif:
 
 ---
 
+### FASE 7: Modul Kasir Meja Bakar (*Strict Role Separation*)
+**Fokus:** Memisahkan operator kasir dari pemilik pembukuan — peran baru `cashier` dengan pintu masuk PIN 6 digit sendiri, izin **hanya** meja kasir + dana talangan, dan dinding di seluruh rute keuangan (rekonsiliasi, kelola modal, dasbor, portal mitra).
+
+#### Daftar Tugas Teknis (Checklist)
+* [x] Peran `cashier` ditambahkan **aditif** pada `users.role` (`ENUM('operator','investor','cashier')`, nilai baru di **ujung** daftar) — **nol tabel baru, nol kolom baru, nol ALTER destruktif**; migrasi lapangan lewat `php database/migrate.php` (terjaga `INFORMATION_SCHEMA`, idempoten).
+* [x] Kredensial kasir memakai kolom yang sudah ada (`users.password_hash`) berisi PIN ber-pepper (`Security::hashPin()`), sehingga PIN tidak pernah sah di pintu kata sandi; pintu kata sandi juga menolak akun `cashier` secara eksplisit.
+* [x] Pintu masuk `GET/POST /cashier/login`: nomor telepon + PIN 6 digit, papan angka Alpine (komponen `investorLogin` yang sudah terdaftar — tanpa komponen baru, tanpa kenaikan `CACHE_NAME`), pembatas percobaan `PinThrottle`, pesan gagal generik.
+* [x] Satu pemilik aturan pintu PIN: `Services/PinLoginService.php` dipakai pintu mitra **dan** pintu kasir (bentuk PIN, throttle, gerbang peran, pesan) — perilaku pintu mitra tidak berubah.
+* [x] **Isolasi *allow-list***: hanya `GET /operator/teller`, `POST /operator/teller`, dan `POST /operator/teller/talangan` menerima peran `cashier` (`TellerController::ALLOWED_ROLES`). Seluruh controller lain tetap `requireRole(ROLE_OPERATOR)`/`(ROLE_INVESTOR)` dan tidak pernah menyebut `ROLE_CASHIER`.
+* [x] **Guard-first**: `requireRole(...)` adalah pernyataan **pertama** setiap method controller, sehingga rute terlarang dijawab `302` ke beranda peran **tanpa tulisan** dan **tanpa mengonsumsi** token `_once` (GET maupun POST).
+* [x] Navigasi sadar peran di `Views/layouts/operator.php`: kasir hanya melihat **Kasir** + **Keluar**; **Rekonsiliasi**, **Kelola Modal**, **Kelola Kasir**, dan tombol **Dashboard** disembunyikan. Header/kartu kasir hanya menampilkan saldo **Kas Meja Bakar** + Emas holding — tidak ada `Brankas Utama`, bagi hasil, maupun data mitra.
+* [x] Layar operator **"Kelola Kasir"** (`GET/POST /operator/kasir` + `POST /operator/kasir/pin` + `POST /operator/kasir/status`): buat akun kasir + PIN awal (kebijakan PIN dipakai ulang), reset PIN, aktivasi/deaktivasi — CSRF + token `_once` + PRG; `APP_PIN_PEPPER` kosong → gagal dengan pesan (fail-closed); akun kasir **tidak** mendapat `capital_wallets`.
+* [x] Satu pemilik pemetaan peran: `BaseController::roleLandingPath()` / `roleLoginPath()` + `Constants::ROLE_LABELS`; layout menerima identitas pengguna lewat `$auth` (tidak membaca `$_SESSION` sendiri).
+* [x] Suite baru `tests/qc_fase_7.php` (grup A–G) membuktikan skema aditif, provisioning, pintu PIN, matriks gating (GET+POST), isolasi tampilan (daftar terlarang + kanari), kontrak statis, dan idempotensi fixture.
+
+#### Protokol QC Manual 7: Isolasi Peran Kasir Meja Bakar
+Jalankan pada lingkungan lokal dengan akun kasir uji (nomor `089700000101`, PIN `246810`):
+
+| Parameter Uji | Data Masukan | Hasil yang Diharapkan | Status |
+| :--- | :--- | :--- | :---: |
+| **Buat akun kasir** | Operator → `/operator/kasir` → nama, nomor, PIN `246810` + konfirmasi | Akun tampil di daftar; PIN tidak pernah tampil di layar; PIN lemah (`111111`, `123456`, `123123`) ditolak `422` | [x] |
+| **Login cepat kasir** | `/cashier/login` → nomor + PIN lewat papan angka | `302` → `/operator/teller`; header menampilkan **Kas Meja Bakar** + Emas holding | [x] |
+| **Kasir catat pembelian** | Geser tombol "Bayar Tunai & Catat" (berat + harga tebus) | Flash sukses; saldo Kas Meja Bakar turun persis; transaksi masuk *holding* | [x] |
+| **Kasir tarik dana talangan** | `/operator/teller` → **Terima Dana Talangan** → pokok + fee | Saldo Kas Meja Bakar **naik**; baris talangan tampil; **tidak ada** angka Brankas/bagi hasil di layar | [x] |
+| **Kasir coba tutup buku** | Buka `/operator/settlement` dan kirim form-nya | Dialihkan ke `/operator/teller`; **nol** tulisan (tidak ada `daily_settlements` baru, kas tidak berubah) | [x] |
+| **Kasir coba kelola modal** | Buka `/operator/capital`, `/operator/kasir`, `/dashboard` (GET) dan kirim keenam form POST-nya | Dialihkan ke `/operator/teller`; nol tulisan; tidak ada satu pun angka `system_settings` terlihat | [x] |
+| **Navbar kasir** | Amati navbar & header | Hanya **Kasir** + **Keluar**; tanpa **Rekonsiliasi**, **Kelola Modal**, **Kelola Kasir**, tanpa tombol **Dashboard** | [x] |
+| **Kasir tidak melihat Brankas** | Cari kata "Brankas" di seluruh layar & modal | Tidak ditemukan di mana pun pada permukaan kasir | [x] |
+| **PIN kasir bukan kata sandi** | `POST /login` dengan nomor + PIN kasir, lalu `POST /investor/login` | `401` pesan generik; tidak ada sesi terbentuk di kedua pintu | [x] |
+| **Kasir dinonaktifkan** | Operator → **Nonaktifkan** → kasir coba login lagi | `401` pesan generik; sesi baru tidak terbentuk | [x] |
+| **Pembatasan percobaan** | PIN salah 5× dari perangkat yang sama | Percobaan ke-5 dijawab `429` dan terkunci 15 menit; pesan tidak mengungkap apakah nomor terdaftar | [x] |
+| **Operator tanpa regresi** | Login `/login`, buka seluruh layar operator | Seluruh fungsi Fase 2–6 tetap utuh (kasir, rekonsiliasi, kelola modal, talangan) | [x] |
+
+> **Catatan Protokol 7.** Seluruh baris di atas dihasilkan otomatis oleh `tests/qc_fase_7.php`
+> (grup A–G) sehingga dokumen ini tidak memiliki dua sumber kebenaran. Peran `cashier` **tidak**
+> memiliki dompet modal: ia bukan mitra, dan `AllocationEngine` tidak pernah menyentuhnya.
+
+---
+
 ## 3. Matriks Estimasi Waktu & Urutan Pengerjaan
 
 | Tahapan Kerja | Estimasi Durasi | Target Capaian Utama |
@@ -364,4 +406,5 @@ Lakukan verifikasi berikut langsung pada domain/subdomain aktif:
 | **Sprint 5 (Fase 5)** | 4 – 5 Hari | Dasbor *blind investor*, lembar *waiver* hukum, autentikasi PIN, dan integrasi PWA. |
 | **Sprint 6 (Fase 6A)** | 1 – 2 Hari | Modul dana talangan: tabel `bridge_loans`, modal penerimaan di kasir, auto-pay fee pada tutup buku, dan isolasi pool mitra. |
 | **Sprint 6 (Fase 6B)** | 2 – 3 Hari | Simulasi perputaran tiga hari (termasuk satu siklus talangan), *hardening* keamanan cPanel, dan peluncuran produksi (*go-live*). |
-| **Total Estimasi** | **~18 – 23 Hari** | **Sistem Siap Operasi Penuh di Lapangan** |
+| **Sprint 7 (Fase 7)** | 2 – 3 Hari | Peran kasir terpisah: PIN 6 digit, pintu `/cashier/login`, *allow-list* meja kasir + talangan, layar "Kelola Kasir", dan navbar sadar peran. |
+| **Total Estimasi** | **~20 – 26 Hari** | **Sistem Siap Operasi Penuh di Lapangan** |

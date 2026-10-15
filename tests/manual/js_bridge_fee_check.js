@@ -334,6 +334,7 @@ check('tanpa talangan: jumlah talangan nol', noBridge.bridgeCountLabel, '0');
 
 const VIEW = path.join(__dirname, '..', '..', 'app', 'Views', 'operator', 'settlement.php');
 const viewSource = fs.readFileSync(VIEW, 'utf8');
+const appSource = fs.readFileSync(APP_JS, 'utf8');
 
 /**
  * Ekspresi `x-show` pada elemen `<p>` yang memuat `$needle`.
@@ -389,18 +390,27 @@ check('regresi UI: baris "Fee talangan" memakai kondisi talangan-aktif',
     feeRowExpr, 'bridgeHasActive');
 check('regresi UI: baris "Hak pengelola bersih" memakai kondisi yang sama',
     takeHomeRowExpr, feeRowExpr);
+// Peringatan "fee tak tertutup" memakai kondisi terpisah yang DIGERBANGI
+// validitas isian: `bridgeWarnUncovered = bridgeHasUncovered && inputValid`.
+// Yang diuji di sini adalah pemisahannya — baris fee tidak boleh ikut memakai
+// kondisi turunan laba ini.
 check('regresi UI: peringatan fee tak tertutup punya kondisinya sendiri',
-    uncoveredNoteExpr, 'bridgeHasUncovered');
+    uncoveredNoteExpr, 'bridgeWarnUncovered');
+check('regresi UI: peringatan itu tetap berasal dari fee tak tertutup',
+    /get bridgeWarnUncovered\(\) \{\s*return this\.bridgeHasUncovered && this\.inputValid;/.test(appSource), true);
 check('regresi UI: baris fee tidak menyebut angka laba',
     /operatorCents|netCents|bridgeUncoveredCents/.test(String(feeRowExpr)), false);
+check('regresi UI: baris fee tidak memakai kondisi peringatan',
+    /bridgeWarnUncovered|bridgeHasUncovered/.test(String(feeRowExpr)), false);
 
 const uiStates = [
-    ['kosong', '', '', '', ''],
-    ['hari sehat', '18,050', '93,50', '2.080.000', '200.000'],
-    ['hari minus', '18,050', '93,50', '1.900.000', '200.000'],
+    // [label, gram, kadar, harga, aparat, peringatan-diharapkan]
+    ['kosong', '', '', '', '', false],
+    ['hari sehat', '18,050', '93,50', '2.080.000', '200.000', false],
+    ['hari minus', '18,050', '93,50', '1.900.000', '200.000', true],
 ];
 
-uiStates.forEach(([label, sold, density, price, coord]) => {
+uiStates.forEach(([label, sold, density, price, coord, warnExpected]) => {
     const scope = settlementComponentWithFields(sold, density, price, coord, 10000000, 1);
 
     check('regresi UI [' + label + ']: baris fee tetap tampil',
@@ -408,7 +418,7 @@ uiStates.forEach(([label, sold, density, price, coord]) => {
     check('regresi UI [' + label + ']: baris hak pengelola bersih tetap tampil',
         alpineEval(scope, String(takeHomeRowExpr)), true);
     check('regresi UI [' + label + ']: peringatan fee tak tertutup',
-        alpineEval(scope, String(uncoveredNoteExpr)), label !== 'hari sehat');
+        alpineEval(scope, String(uncoveredNoteExpr)), warnExpected);
 });
 
 // Nilai yang ditampilkan pada hari sehat harus terisi (bukan placeholder Rp 0).

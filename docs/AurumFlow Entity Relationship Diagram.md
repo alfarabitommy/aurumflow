@@ -123,7 +123,12 @@ CREATE TABLE users (
     full_name VARCHAR(100) NOT NULL,
     phone_number VARCHAR(20) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    role ENUM('operator', 'investor') NOT NULL DEFAULT 'investor',
+    -- Tiga peran (Fase 7): `operator` = Pengelola, `investor` = Mitra Pemodal,
+    -- `cashier` = Kasir Meja Bakar (staf, PIN 6 digit, tanpa dompet modal).
+    -- ATURAN: nilai ENUM hanya boleh DITAMBAHKAN DI UJUNG daftar. MySQL/MariaDB
+    -- menyimpan nilai ENUM sebagai indeks ordinal, sehingga menyisipkan atau
+    -- mengurutkan ulang nilai akan memetakan ulang arti baris yang sudah ada.
+    role ENUM('operator', 'investor', 'cashier') NOT NULL DEFAULT 'investor',
     invite_token VARCHAR(64) NULL UNIQUE,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     
@@ -325,3 +330,12 @@ INSERT INTO cash_registers (id, register_name, current_balance) VALUES
    melayani satu-satunya jalur baca terpanas tabel itu — "talangan aktif, urutan FIFO"
    (`WHERE status = 'active' ORDER BY created_at ASC, id ASC`) — yang dijalankan **setiap** sesi
    tutup buku dan setiap render Layar B/C, sehingga tidak ada pembacaan penuh tabel.
+5. **Migrasi Aditif Peran Kasir (Fase 7):** penambahan nilai `'cashier'` pada `users.role`
+   dilakukan sebagai `ALTER TABLE users MODIFY COLUMN role ENUM('operator','investor','cashier') …`
+   — **hanya menambah di ujung daftar**, sehingga menjadi perubahan metadata *in-place* pada
+   MySQL 8.0 maupun MariaDB (tanpa penyalinan tabel, tanpa penulisan ulang baris). Instalasi
+   lapangan menjalankan `php database/migrate.php` yang **terjaga** (`INFORMATION_SCHEMA`) dan
+   **idempoten**; `database/schema.sql` sudah memuat nilai itu untuk instalasi baru sehingga
+   **tidak ada tabel maupun kolom baru** dan tidak ada `ALTER` yang bersifat destruktif.
+   Tidak ada kolom kredensial tambahan: PIN kasir disimpan ber-pepper pada kolom
+   `users.password_hash` yang sudah ada (`role` adalah pembeda pintu masuk).

@@ -5,10 +5,9 @@ declare(strict_types=1);
 namespace AurumFlow\Controllers;
 
 use AurumFlow\Config\Constants;
-use AurumFlow\Helpers\Logger;
-use AurumFlow\Helpers\PinThrottle;
 use AurumFlow\Helpers\Security;
 use AurumFlow\Models\User;
+use AurumFlow\Services\PinLoginService;
 
 /**
  * Pintu masuk mitra pemodal: nomor telepon + PIN 6 digit (Fase 5).
@@ -20,12 +19,10 @@ use AurumFlow\Models\User;
  *   - **Pintu ini tidak boleh membocorkan apa pun.** Pesan gagal selalu
  *     generik, dan hanya akun berperan `investor` yang dapat masuk lewat sini.
  *
- * Aturan yang dipegang:
- *   1. PIN **ber-pepper** (`Security::verifyPin()`), sehingga PIN tidak pernah
- *      sah di `POST /login` — pembatas percobaan punya satu pintu.
- *   2. `PinThrottle` membatasi 5 kegagalan / 15 menit per `nomor + IP`; pesan
- *      `429` menyebut sisa menit, tanpa mengungkap apakah nomor terdaftar.
- *   3. Session ID diregenerasi + token CSRF diputar setelah login berhasil.
+ * Sejak Fase 7 seluruh **aturan** pintu PIN hidup di `PinLoginService` (bentuk
+ * PIN, `PinThrottle`, gerbang peran, pesan generik, jejak log) karena pintu
+ * kasir memakai aturan yang sama. Controller ini hanya menyediakan permukaan
+ * khas mitra: view, layout, dan berandanya sendiri.
  */
 final class InvestorAuthController extends BaseController
 {
@@ -62,73 +59,28 @@ final class InvestorAuthController extends BaseController
             );
         }
 
-        $phoneNumber = self::post('phone_number');
-        $pin = self::post('pin');
+        $result = PinLoginService::attempt(
+            [
+                'phone_number' => $_POST['phone_number'] ?? null,
+                'pin'          => $_POST['pin'] ?? null,
+            ],
+            Constants::ROLE_INVESTOR,
+            User::clientIp() ?? ''
+        );
 
-        if ($phoneNumber === '' || $pin === '') {
-            $this->renderLogin('Nomor telepon dan PIN wajib diisi.', $phoneNumber, 422);
-
-            return;
-        }
-
-        $ipAddress = User::clientIp() ?? '';
-        $lockedSeconds = PinThrottle::check($phoneNumber, $ipAddress);
-
-        if ($lockedSeconds > 0) {
-            $this->renderLogin(self::lockedMessage($lockedSeconds), $phoneNumber, 429);
-
-            return;
-        }
-
-        if (preg_match('/^[0-9]{' . Security::PIN_LENGTH . '}$/', $pin) !== 1) {
+        if ($result['outcome'] !== PinLoginService::OK) {
             $this->renderLogin(
-                'PIN harus tepat ' . Security::PIN_LENGTH . ' angka.',
-                $phoneNumber,
-                422
+                (string) $result['message'],
+                (string) $result['phone_number'],
+                (int) $result['http_status']
             );
 
             return;
         }
 
-        $user = User::findByPhoneNumber($phoneNumber);
+        $this->startUserSession((array) $result['user']);
 
-        if ($user === null
-            || (string) $user['role'] !== Constants::ROLE_INVESTOR
-            || !User::verifyPin($user, $pin)
-        ) {
-            $lockedSeconds = PinThrottle::recordFailure($phoneNumber, $ipAddress);
-
-            Logger::warning('Percobaan login mitra gagal', [
-                'phone_number' => $phoneNumber,
-                'ip'           => $ipAddress,
-            ]);
-
-            $message = $lockedSeconds > 0
-                ? self::lockedMessage($lockedSeconds)
-                : 'Nomor telepon atau PIN salah.';
-
-            $this->renderLogin($message, $phoneNumber, $lockedSeconds > 0 ? 429 : 401);
-
-            return;
-        }
-
-        PinThrottle::clear($phoneNumber, $ipAddress);
-
-        Security::regenerateSession();
-        Security::rotateCsrf();
-
-        $_SESSION['user_id']    = (string) $user['id'];
-        $_SESSION['user_name']  = (string) $user['full_name'];
-        $_SESSION['user_phone'] = (string) $user['phone_number'];
-        $_SESSION['user_role']  = (string) $user['role'];
-        $_SESSION['login_at']   = time();
-
-        Logger::info('Login mitra berhasil', [
-            'user_id' => (string) $user['id'],
-            'ip'      => $ipAddress,
-        ]);
-
-        $this->redirect(self::roleLandingPath((string) $user['role']));
+        $this->redirect(self::roleLandingPath(Constants::ROLE_INVESTOR));
     }
 
     // -----------------------------------------------------------------------
@@ -153,19 +105,5 @@ final class InvestorAuthController extends BaseController
             'phone_number' => $phoneNumber,
             'pin_length'   => Security::PIN_LENGTH,
         ], self::LAYOUT);
-    }
-
-    private static function lockedMessage(int $remainingSeconds): string
-    {
-        $minutes = max(1, (int) ceil($remainingSeconds / 60));
-
-        return 'Terlalu banyak percobaan masuk. Coba lagi dalam ' . $minutes . ' menit.';
-    }
-
-    private static function post(string $field): string
-    {
-        $value = $_POST[$field] ?? null;
-
-        return is_string($value) ? trim($value) : '';
     }
 }

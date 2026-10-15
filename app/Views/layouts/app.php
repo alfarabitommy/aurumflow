@@ -10,7 +10,7 @@ declare(strict_types=1);
  *                      karena itu TIDAK di-escape lagi di sini)
  *   $title     string  judul halaman
  *   $app_name  string  nama aplikasi
- *   $user      array   data pengguna yang sedang login
+ *   $auth      array   identitas pengguna yang sedang login ({id,name,phone,role,role_label})
  *   $flash     array   pesan sekali pakai {kind, message} — boleh kosong
  */
 
@@ -18,7 +18,7 @@ use AurumFlow\Config\App;
 use AurumFlow\Config\Constants;
 use AurumFlow\Helpers\Security;
 
-$user = is_array($user ?? null) ? $user : [];
+$auth = is_array($auth ?? null) ? $auth : [];
 $flash = is_array($flash ?? null) ? $flash : [];
 $flashMessage = isset($flash['message']) && is_string($flash['message']) ? $flash['message'] : '';
 
@@ -28,7 +28,7 @@ $flashClass = match ((string) ($flash['kind'] ?? 'info')) {
     default   => 'af-alert--info',
 };
 
-$isOperator = ($user['role'] ?? '') === Constants::ROLE_OPERATOR;
+$isOperator = ($auth['role'] ?? '') === Constants::ROLE_OPERATOR;
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -57,8 +57,8 @@ $isOperator = ($user['role'] ?? '') === Constants::ROLE_OPERATOR;
             <?php endif; ?>
 
             <span class="text-right text-xs leading-tight">
-                <span class="block font-semibold text-pure"><?= Security::e($user['name'] ?? '') ?></span>
-                <span class="block text-muted"><?= Security::e($user['role_label'] ?? ($user['role'] ?? '')) ?></span>
+                <span class="block font-semibold text-pure"><?= Security::e($auth['name'] ?? '') ?></span>
+                <span class="block text-muted"><?= Security::e($auth['role_label'] ?? '') ?></span>
             </span>
 
             <form method="post" action="<?= Security::e(App::url('logout')) ?>" class="inline"

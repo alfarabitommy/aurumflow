@@ -24,18 +24,31 @@ AurumFlow dirancang khusus untuk mengelola operasional harian perdagangan dan pe
 
 ## 2. Struktur Pengguna & Hak Akses (*Role-Based Permissions*)
 
-| Fitur / Modul Operasional | Pengelola / Admin (Operator) | Mitra Pemodal (Investor) |
-| :--- | :---: | :---: |
-| Input Transaksi Beli Petani (Timbang Kering) | Penuh (CRUD) | Terblokir Total |
-| Input Penjualan Toko Emas & Unggah Nota | Penuh (CRUD) | Terblokir Total |
-| Eksekusi Tutup Buku Harian (*Daily Settlement*) | Ya | Tidak |
-| Akses Pengaturan Kuota Serapan Modal (*Waterfall Engine*) | Ya | Tidak |
-| Akses Pengaturan Kuota Mitra Prioritas | Ya | Tidak |
-| Monitor Saldo Modal Pokok Sendiri | Ya | Ya (Milik Sendiri) |
-| Monitor Status Modal (Aktif Berputar vs Mengendap) | Ya | Ya (Milik Sendiri) |
-| Riwayat Imbal Hasil (Dividen) Pribadi | Ya | Ya (Milik Sendiri) |
-| Pengajuan Penarikan Modal Pokok (*Notice Period H-7*) | Tidak | Ya |
-| Ekspor Laporan Kas Sederhana (PDF/Excel) | Ya (Versi Lengkap) | Ya (Versi Ringkas) |
+Sejak Fase 7 ada **tiga** peran (`users.role`): `operator` (Pengelola/Pemilik), `investor` (Mitra Pemodal), dan `cashier` (Kasir Meja Bakar — staf lapangan). Setiap peran punya pintu masuk kredensialnya sendiri dan **tidak** dapat memakai pintu peran lain.
+
+| Fitur / Modul Operasional | Pengelola / Admin (Operator) | Kasir Meja Bakar (Cashier) | Mitra Pemodal (Investor) |
+| :--- | :---: | :---: | :---: |
+| Input Transaksi Beli Petani (Timbang Kering) | Penuh (CRUD) | Ya (hanya input & baca kas meja) | Terblokir Total |
+| Terima Dana Talangan (*Bridge Liquidity*) | Ya | Ya (kebutuhan likuiditas malam) | Terblokir Total |
+| Monitor Saldo Kas Meja Bakar & Emas *Holding* | Ya | Ya | Terblokir Total |
+| Monitor Saldo `Brankas Utama` (rumah modal) | Ya | **Terblokir Total** | Terblokir Total |
+| Input Penjualan Toko Emas & Unggah Nota | Penuh (CRUD) | Terblokir Total | Terblokir Total |
+| Eksekusi Tutup Buku Harian (*Daily Settlement*) | Ya | Terblokir Total | Tidak |
+| Akses Pengaturan Kuota Serapan Modal (*Waterfall Engine*) | Ya | Terblokir Total | Tidak |
+| Akses Pengaturan Kuota Mitra Prioritas | Ya | Terblokir Total | Tidak |
+| Tata Kelola Akun Kasir (buat, reset PIN, nonaktifkan) | Ya | Terblokir Total | Terblokir Total |
+| Monitor Saldo Modal Pokok Sendiri | Ya | Tidak (bukan mitra modal) | Ya (Milik Sendiri) |
+| Monitor Status Modal (Aktif Berputar vs Mengendap) | Ya | Terblokir Total | Ya (Milik Sendiri) |
+| Riwayat Imbal Hasil (Dividen) Pribadi | Ya | Terblokir Total | Ya (Milik Sendiri) |
+| Pengajuan Penarikan Modal Pokok (*Notice Period H-7*) | Tidak | Tidak | Ya |
+| Ekspor Laporan Kas Sederhana (PDF/Excel) | Ya (Versi Lengkap) | Terblokir Total | Ya (Versi Ringkas) |
+
+### 2.1. Batas Keras Peran Kasir (Fase 7)
+
+* **Daftar izin eksplisit (*allow-list*).** Sesi `cashier` hanya diterima oleh tiga endpoint: `GET /operator/teller`, `POST /operator/teller`, dan `POST /operator/teller/talangan`. Seluruh rute keuangan lain (rekonsiliasi, kelola modal, dasbor ringkasan, tata kelola kasir, portal mitra) menolaknya dengan pengalihan `302` ke beranda perannya (`/operator/teller`) **tanpa satu pun tulisan** — berlaku untuk GET maupun POST.
+* **Kredensial PIN 6 digit ber-pepper** (`Security::hashPin()`), tersimpan pada kolom `users.password_hash` yang sudah ada dengan pembatas percobaan `PinThrottle` (5 kegagalan / 15 menit per `nomor + IP`). PIN kasir **tidak pernah** sah di pintu kata sandi maupun di pintu PIN mitra.
+* **Bukan mitra modal.** Akun kasir tidak memiliki `capital_wallets`, tidak menerima bagi hasil, dan tidak pernah dihitung `AllocationEngine`.
+* **Tidak melihat bagi hasil pemilik.** Permukaan kasir tidak memuat saldo `Brankas Utama`, `laba bersih`, `pool mitra`, `omzet`, maupun data mitra pemodal.
 
 ---
 
@@ -386,6 +399,29 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
 
 ---
 
+### Modul 6: Peran Kasir Meja Bakar & Isolasi Izin (*Strict Role Separation*) — Fase 7
+
+* **Konteks.** Meja Bakar dijaga staf, bukan pemilik: memberi kredensial pengelola kepada kasir
+  berarti menyerahkan seluruh pembukuan (saldo `Brankas Utama`, mode alokasi, kuota 50 %,
+  dompet mitra, bagi hasil 80 : 20). Modul ini memisahkan peran secara struktural.
+* **Peran & kredensial.** Peran ketiga `cashier` pada `users.role` (aditif). Kasir masuk lewat
+  `GET/POST /cashier/login` dengan **nomor telepon + PIN 6 digit** (papan angka Alpine, papan
+  yang sama dengan mitra). PIN disimpan ber-pepper pada kolom `users.password_hash` yang sudah
+  ada, dengan pembatas percobaan `PinThrottle`; PIN kasir tidak sah di pintu kata sandi maupun
+  pintu PIN mitra.
+* **Izin (*allow-list*).** Kasir **hanya** boleh: input pembelian hulu (`GET/POST
+  /operator/teller`), melihat saldo Kas Meja Bakar + Emas *holding*, dan **menerima dana
+  talangan** (`POST /operator/teller/talangan`). Seluruh rute lain — rekonsiliasi, kelola modal,
+  dasbor ringkasan, tata kelola kasir, portal mitra — menolaknya dengan `302` ke `/operator/teller`
+  **tanpa tulisan**.
+* **Tata kelola akun.** Pengelola membuat/menonaktifkan akun kasir dan mereset PIN-nya dari layar
+  **"Kelola Kasir"** (`/operator/kasir`); kasir **tidak** memiliki dompet modal dan tidak pernah
+  menerima bagi hasil.
+* **Isolasi permukaan.** Navigasi kasir hanya memuat meja kasir; header/kartu kasir tidak pernah
+  menampilkan `Brankas Utama`, laba bersih, `pool mitra`, omzet, maupun data mitra pemodal.
+
+---
+
 ## 7. Desain Skema Basis Data (*Entity Schema*)
 
 ```
@@ -395,7 +431,7 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
 │ id (PK, UUID)             │         │ id (PK, UUID)             │
 │ full_name (varchar)       │◄────────┤ user_id (FK)              │
 │ phone_number (varchar)    │         │ tier: operator/family/ext │
-│ role (operator/investor)  │         │ balance_capital (decimal) │
+│ role (operator/investor/cashier) │         │ balance_capital (decimal) │
 │ is_active (boolean)       │         │ balance_profit (decimal)  │
 │ invite_token (varchar)    │         │ locked_quota_pct (decimal)│
 │ onboarding_signed_at      │         │ withdrawal_status (enum)  │
@@ -454,6 +490,12 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
      "talangan" bergabung ke daftar terlarang berkas investor — likuiditas/kredit pengelola adalah
      informasi internal operator. Tidak ada route investor yang membaca tabel itu, dan assertion
      HTTP atas body dasbor, laporan cetak, serta CSV memastikan istilah tersebut tidak pernah bocor.
+   * **Penegakan Fase 7 (Peran Kasir):** sesi `cashier` ditolak oleh seluruh controller keuangan
+     (`SettlementController`, `CapitalController`, `DashboardController`, `CashierController`,
+     jalan investor) lewat `requireRole(...)` yang menjadi **pernyataan pertama** setiap method —
+     dijawab `302` ke `/operator/teller` **tanpa tulisan** dan tanpa mengonsumsi token `_once`.
+     Permukaan kasir (`/operator/teller`) tidak boleh memuat `Brankas Utama`, `laba bersih`,
+     `pool mitra`, `omzet`, maupun data mitra; dibuktikan assertion HTTP + kanari angka.
 2. **Isolasi Kredensial PIN:** PIN 6 digit disimpan ber-pepper (bukan hash polos) sehingga PIN tidak
    pernah memuaskan pintu kata sandi, dan percobaan login dibatasi **5 kegagalan → kunci 15 menit**
    per kombinasi nomor + IP pada kedua pintu masuk. Tautan undangan bersifat sekali pakai.

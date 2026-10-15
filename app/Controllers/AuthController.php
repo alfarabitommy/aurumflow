@@ -75,7 +75,14 @@ final class AuthController extends BaseController
             return;
         }
 
-        if ($user === null || !User::verifyPassword($user, $password)) {
+        // Doktrin "satu kredensial, satu pintu": akun kasir memakai PIN ber-pepper
+        // (Fase 7), sehingga hash-nya tidak akan pernah cocok di sini. Penolakan
+        // eksplisit menjaga pintu kata sandi tetap bukan pintu belakang ke akun
+        // kasir bila kelak seseorang menuliskan kata sandi pada baris itu.
+        if ($user === null
+            || (string) $user['role'] === Constants::ROLE_CASHIER
+            || !User::verifyPassword($user, $password)
+        ) {
             $lockedSeconds = PinThrottle::recordFailure($phoneNumber, $ipAddress);
 
             Logger::warning('Percobaan login gagal', [
@@ -97,15 +104,9 @@ final class AuthController extends BaseController
 
         PinThrottle::clear($phoneNumber, $ipAddress);
 
-        // Anti session fixation: ganti ID session lalu terbitkan token CSRF baru.
-        Security::regenerateSession();
-        Security::rotateCsrf();
-
-        $_SESSION['user_id']       = (string) $user['id'];
-        $_SESSION['user_name']     = (string) $user['full_name'];
-        $_SESSION['user_phone']    = (string) $user['phone_number'];
-        $_SESSION['user_role']     = (string) $user['role'];
-        $_SESSION['login_at']      = time();
+        // Anti session fixation + lima kunci session: satu pemilik
+        // (`BaseController::startUserSession()`), dipakai ketiga pintu masuk.
+        $this->startUserSession($user);
 
         Logger::info('Login berhasil', [
             'user_id' => (string) $user['id'],
@@ -137,9 +138,9 @@ final class AuthController extends BaseController
 
         Security::destroySession();
 
-        // Mitra kembali ke pintu PIN-nya, operator ke pintu kata sandi —
-        // memakai pemetaan peran yang sama dengan requireRole().
-        $this->redirect($role === Constants::ROLE_INVESTOR ? '/investor/login' : '/login');
+        // Setiap peran kembali ke pintunya sendiri (kata sandi, PIN mitra, PIN
+        // kasir) memakai pemetaan peran yang sama dengan requireRole().
+        $this->redirect(self::roleLoginPath($role));
     }
 
     /**

@@ -24,6 +24,33 @@ final class Constants
 
     public const ROLE_INVESTOR = 'investor';
 
+    /** Kasir meja bakar (Fase 7) — staf lapangan, bukan mitra modal. */
+    public const ROLE_CASHIER = 'cashier';
+
+    /**
+     * Label tampilan per peran — SATU-SATUNYA pemilik label peran.
+     *
+     * Nilai enum mentah (`operator`/`investor`/`cashier`) tidak pernah dicetak
+     * ke layar; layout, dashboard, dan view lain membacanya lewat
+     * `roleLabel()`. Pola yang sama dengan `CapitalWallet::TIER_LABELS`.
+     *
+     * @var array<string, string>
+     */
+    public const ROLE_LABELS = [
+        self::ROLE_OPERATOR => 'Pengelola (Operator)',
+        self::ROLE_INVESTOR => 'Mitra Pemodal (Investor)',
+        self::ROLE_CASHIER  => 'Kasir Meja Bakar',
+    ];
+
+    /**
+     * Label satu peran. Peran tak dikenal (sesi rusak) dikembalikan apa adanya
+     * supaya layar tidak pernah kosong tanpa penjelasan.
+     */
+    public static function roleLabel(string $role): string
+    {
+        return self::ROLE_LABELS[$role] ?? $role;
+    }
+
     /** Konvensi tampilan Rupiah (ERD/PRD: tanpa desimal, `Rp 28.937.500`). */
     public const MONEY_DECIMALS = 0;
 

@@ -68,9 +68,11 @@ aurumflow/
 │   │   ├── AuthController.php        # Login kata sandi (operator & akun lama), logout
 │   │   ├── InvestorAuthController.php     # Pintu PIN 6 digit mitra (Fase 5)
 │   │   ├── InvestorOnboardingController.php # Klaim tautan undangan + clickwrap waiver (Fase 5)
-│   │   ├── TellerController.php      # Kasir meja hulu (timbang & bayar tunai)
+│   │   ├── CashierAuthController.php # Pintu PIN 6 digit kasir meja bakar (Fase 7)
+│   │   ├── TellerController.php      # Kasir meja hulu (timbang & bayar tunai, dana talangan)
 │   │   ├── SettlementController.php  # Likuidasi toko & penutupan buku harian
 │   │   ├── CapitalController.php     # Tata kelola modal: setoran, pindah kas, kuota, penarikan, undangan
+│   │   ├── CashierController.php     # Kelola Kasir: buat akun, reset PIN, aktif/nonaktif (Fase 7)
 │   │   ├── InvestorController.php    # Dasbor blind investor & permohonan penarikan (Fase 5)
 │   │   └── ExportController.php      # Laporan ramah cetak + CSV (Fase 5: lingkup investor)
 │   ├── Models/                       # SATU-SATUNYA tempat SQL hidup (lihat AGENTS.md)
@@ -85,6 +87,8 @@ aurumflow/
 │   │   ├── CapitalService.php        # Setoran modal, pindah kas, penarikan (Fase 4)
 │   │   ├── OnboardingService.php     # Klaim undangan, kebijakan PIN, teks waiver (Fase 5)
 │   │   ├── InvestorService.php       # View-model blind + pengajuan penarikan mitra (Fase 5)
+│   │   ├── PinLoginService.php       # Satu pemilik aturan pintu PIN (mitra & kasir, Fase 7)
+│   │   ├── CashierService.php        # Kelola akun kasir: buat, reset PIN, aktif/nonaktif (Fase 7)
 │   │   └── BridgeLoanService.php     # Fee talangan, penerimaan kas, pengembalian T+1 (Fase 6)
 │   ├── Helpers/
 │   │   ├── Security.php              # Sanitasi input, token CSRF, hashing (kata sandi & PIN + pepper)
@@ -95,7 +99,8 @@ aurumflow/
 │       ├── layouts/                  # app.php (operator), auth.php, operator.php,
 │       │                             # investor.php (Fase 5), report.php (ramah cetak)
 │       ├── auth/                     # Halaman login kata sandi
-│       ├── operator/                 # Meja kasir (+ modal dana talangan), rekonsiliasi toko, kelola modal
+│       ├── cashier/                  # Pintu PIN kasir meja bakar (Fase 7)
+│       ├── operator/                 # Meja kasir (+ modal talangan), rekonsiliasi, kelola modal, kelola kasir
 │       └── investor/                 # login (PIN), onboarding (waiver), dashboard (blind), report
 ├── public/                           # FOLDER PUBLIK (Diarahkan ke public_html)
 │   ├── assets/
@@ -137,6 +142,17 @@ aurumflow/
 > mengembalikan pokok + fee di dalam transaksi tutup buku) — pola yang sama dengan
 > `CapitalService`/`AllocationEngine`, bukan helper murni. Tidak ada berkas investor yang tersentuh.
 > Rincian & alasan: `plan/Plan_Fase_6_Talangan_AurumFlow.md`.
+
+> **Catatan penempatan (Fase 7).** `CashierAuthController.php` mengikuti alasan yang sama dengan
+> `InvestorAuthController.php`: pintu masuk dengan semantik kredensial yang berbeda (PIN kasir)
+> tidak dicampur ke `AuthController` agar pintu kata sandi tidak tersentuh, sedangkan aturan
+> pintu PIN (bentuk PIN, pembatas percobaan, pesan generik, gerbang peran) hidup **satu kali**
+> di `Services/PinLoginService.php` yang dipakai kedua pintu. `CashierController.php` +
+> `Services/CashierService.php` memuat use-case tata kelola akun kasir (buat, reset PIN,
+> aktif/nonaktif) — tidak disatukan ke `CapitalController` karena akun staf bukan tata kelola
+> modal. `Views/cashier/` adalah permukaan masuk tersendiri (layout `auth`), dan tidak ada
+> berkas investor maupun berkas kas yang tersentuh. Rincian & alasan:
+> `plan/Plan_Fase_7_Kasir_AurumFlow.md`.
 
 ---
 
@@ -248,6 +264,35 @@ Aturan ini mencegah peretasan melalui *web shell* jika ada berkas berbahaya yang
 * **Penjagaan saldo sebelum tulisan.** Bila `saldo meja setelah alokasi < Σ(pokok + fee)`, tutup buku
   ditolak `422` **tanpa satu pun tulisan** dan talangan tetap `active` untuk dicoba pada siklus
   berikutnya.
+
+### 4.6. Pemisahan Peran Kasir & Isolasi Permukaan (Fase 7)
+
+* **Tiga peran, satu pintu per kredensial.** `users.role` = `operator` (Pengelola, kata sandi di
+  `POST /login`), `investor` (Mitra Pemodal, PIN di `POST /investor/login`), `cashier`
+  (Kasir Meja Bakar, PIN di `POST /cashier/login`). PIN kasir disimpan **ber-pepper** pada kolom
+  `users.password_hash` yang sudah ada, sehingga PIN itu tidak pernah sah di pintu kata sandi;
+  pintu kata sandi juga **menolak** akun ber-`role = cashier` secara eksplisit.
+* ***Allow-list*, bukan *deny-list*.** Satu-satunya permukaan yang menerima peran `cashier` adalah
+  `TellerController` (`GET /operator/teller`, `POST /operator/teller`,
+  `POST /operator/teller/talangan`) melalui daftar izin eksplisit
+  `[ROLE_OPERATOR, ROLE_CASHIER]`. Seluruh controller lain memakai
+  `requireRole(Constants::ROLE_OPERATOR)` (atau `ROLE_INVESTOR`) dan **tidak pernah** menyebut
+  `ROLE_CASHIER`.
+* **Guard-first.** `requireRole(...)` adalah **pernyataan pertama** setiap method publik controller —
+  sebelum pemeriksaan CSRF kedua, sebelum `Security::consumeFormToken()`, dan sebelum transaksi
+  basis data. Akibatnya sesi kasir yang mencoba rute terlarang dijawab `302` menuju beranda
+  perannya (`/operator/teller`) **tanpa satu pun tulisan** dan **tanpa mengonsumsi token `_once`**
+  miliknya. Pola ini berlaku untuk GET maupun POST.
+* **Satu pemilik pemetaan peran.** `BaseController::roleLandingPath()` (beranda) dan
+  `roleLoginPath()` (pintu masuk setelah keluar) adalah satu-satunya tempat peran dipetakan ke
+  URL; `render()` menyuntikkan `$auth` sehingga layout tidak perlu membaca `$_SESSION` sendiri.
+  Label peran hidup satu kali di `Constants::ROLE_LABELS`.
+* **Permukaan kasir bebas data pemilik.** Berkas yang terjangkau sesi kasir
+  (`TellerController`, `Views/operator/teller.php`, `Views/layouts/operator.php`,
+  `Views/cashier/login.php`, `TellerService`, `BridgeLoanService`) tidak boleh menyebut
+  `BRANKAS_NAME`/`findBrankas`, dompet modal (`CapitalWallet`), `SystemSetting`, maupun angka
+  bagi hasil (`laba bersih`, `pool mitra`, `omzet`). Navigasi operator (Rekonsiliasi, Kelola Modal,
+  Kelola Kasir, Dashboard) disembunyikan bagi kasir di `Views/layouts/operator.php`.
 
 ---
 

@@ -5,33 +5,49 @@ declare(strict_types=1);
 /*
  * Layout meja kasir hulu (tema "Obsidian Gold", mobile-first).
  *
- * Variabel dari BaseController::render(): $content, $title, $app_name, $user,
+ * Variabel dari BaseController::render(): $content, $title, $app_name, $auth,
  * $flash, plus data view kasir ($register, $holding). Variabel view memang
  * terlihat oleh layout karena BaseController me-require keduanya dalam satu
- * scope — sama seperti layout app.php yang memakai $user.
+ * scope — sama seperti layout app.php yang memakai $auth.
  *
  * Alasan layout terpisah: operator bekerja satu tangan di samping timbangan,
  * sehingga saldo kas harus selalu terlihat (header sticky) tanpa harus
  * menggulir, dan target sentuh dibuat lebih besar daripada halaman dashboard.
+ *
+ * Sejak Fase 7 layout ini melayani **dua peran** dan karena itu navigasinya
+ * sadar peran: kasir hanya melihat meja kasir (satu-satunya permukaan yang
+ * menerima perannya), sementara operator melihat seluruh menu. Penyembunyian
+ * menu bersifat kosmetik — rute terlarangnya tetap dijaga peladen dan dijawab
+ * `302` ke beranda peran tanpa tulisan.
  */
 
 use AurumFlow\Config\App;
+use AurumFlow\Config\Constants;
 use AurumFlow\Helpers\Security;
 
 $register = is_array($register ?? null) ? $register : [];
 $holding = is_array($holding ?? null) ? $holding : [];
-$user = is_array($user ?? null) ? $user : [];
+$auth = is_array($auth ?? null) ? $auth : [];
 $flash = is_array($flash ?? null) ? $flash : [];
 $flashMessage = isset($flash['message']) && is_string($flash['message']) ? $flash['message'] : '';
+
+// Identitas & peran sesi. Nilainya datang dari session (bukan formulir),
+// disuntikkan BaseController::render() sebagai `$auth`.
+$role = isset($auth['role']) && is_string($auth['role']) ? $auth['role'] : '';
+$isCashier = $role === Constants::ROLE_CASHIER;
 
 // Navigasi antar layar operator. Path aktif dibandingkan dengan REQUEST_URI
 // supaya penanda "sedang dibuka" tetap benar pada pemasangan subdirektori.
 $activePath = rtrim((string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH), '/');
 $navItems = [
     ['path' => App::url('operator/teller'), 'label' => 'Kasir', 'active' => false],
-    ['path' => App::url('operator/settlement'), 'label' => 'Rekonsiliasi', 'active' => false],
-    ['path' => App::url('operator/capital'), 'label' => 'Kelola Modal', 'active' => false],
 ];
+
+if (!$isCashier) {
+    $navItems[] = ['path' => App::url('operator/settlement'), 'label' => 'Rekonsiliasi', 'active' => false];
+    $navItems[] = ['path' => App::url('operator/capital'), 'label' => 'Kelola Modal', 'active' => false];
+    $navItems[] = ['path' => App::url('operator/kasir'), 'label' => 'Kelola Kasir', 'active' => false];
+}
 
 foreach ($navItems as $index => $item) {
     $itemPath = rtrim((string) $item['path'], '/');
@@ -67,8 +83,15 @@ $flashClass = match ((string) ($flash['kind'] ?? 'info')) {
         </div>
 
         <div class="flex items-center gap-2">
-            <a class="af-btn af-btn--ghost px-3 text-xs"
-               href="<?= Security::e(App::url('dashboard')) ?>">Dashboard</a>
+            <?php if (!$isCashier): ?>
+                <a class="af-btn af-btn--ghost px-3 text-xs"
+                   href="<?= Security::e(App::url('dashboard')) ?>">Dashboard</a>
+            <?php endif; ?>
+
+            <span class="hidden text-right text-[0.7rem] leading-tight sm:block">
+                <span class="block font-semibold text-pure"><?= Security::e($auth['name'] ?? '') ?></span>
+                <span class="block text-muted"><?= Security::e($auth['role_label'] ?? '') ?></span>
+            </span>
 
             <form method="post" action="<?= Security::e(App::url('logout')) ?>" class="inline"
                   data-confirm="Keluar dari AurumFlow?">

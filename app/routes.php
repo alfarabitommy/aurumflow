@@ -19,6 +19,8 @@ declare(strict_types=1);
 
 use AurumFlow\Controllers\AuthController;
 use AurumFlow\Controllers\CapitalController;
+use AurumFlow\Controllers\CashierAuthController;
+use AurumFlow\Controllers\CashierController;
 use AurumFlow\Controllers\DashboardController;
 use AurumFlow\Controllers\ExportController;
 use AurumFlow\Controllers\InvestorAuthController;
@@ -39,6 +41,10 @@ return [
         // Pintu PIN mitra — terpisah dari pintu kata sandi operator.
         '/investor/login'      => [InvestorAuthController::class, 'showLogin'],
 
+        // Pintu PIN kasir meja bakar (Fase 7): permukaan masuk tersendiri dengan
+        // daftar izin tersendiri (hanya meja kasir + dana talangan).
+        '/cashier/login'       => [CashierAuthController::class, 'showLogin'],
+
         // Ringkasan operator. Sejak Fase 5 halaman ini memuat isi
         // `system_settings`, sehingga mitra diarahkan ke dasbornya sendiri.
         '/dashboard'           => [DashboardController::class, 'index'],
@@ -51,6 +57,10 @@ return [
         '/operator/teller'     => [TellerController::class, 'index'],
         '/operator/settlement' => [SettlementController::class, 'index'],
         '/operator/capital'    => [CapitalController::class, 'index'],
+
+        // Kelola Kasir (Fase 7) — tata kelola akun staf, khusus operator.
+        // Kasir yang membukanya diarahkan kembali ke meja kasir tanpa tulisan.
+        '/operator/kasir'      => [CashierController::class, 'index'],
     ],
 
     'POST' => [
@@ -58,6 +68,9 @@ return [
         '/logout'              => [AuthController::class, 'logout'],
         '/join'                => [InvestorOnboardingController::class, 'submit'],
         '/investor/login'      => [InvestorAuthController::class, 'login'],
+
+        // Pintu PIN kasir (Fase 7): nomor telepon + PIN 6 digit.
+        '/cashier/login'       => [CashierAuthController::class, 'login'],
 
         // Penarikan mandiri mitra — jalur yang mengubah hak dana, jadi
         // memakai token sekali-pakai `_once` di controller.
@@ -79,5 +92,11 @@ return [
         '/operator/capital/transfer'   => [CapitalController::class, 'transfer'],
         '/operator/capital/withdrawal' => [CapitalController::class, 'withdrawal'],
         '/operator/capital/invite'     => [CapitalController::class, 'invite'],
+
+        // Kelola Kasir (Fase 7). Mutasi identitas: buat akun kasir, reset PIN, dan
+        // aktif/nonaktif — semuanya memakai token sekali-pakai `_once` + PRG.
+        '/operator/kasir'              => [CashierController::class, 'store'],
+        '/operator/kasir/pin'          => [CashierController::class, 'resetPin'],
+        '/operator/kasir/status'       => [CashierController::class, 'setStatus'],
     ],
 ];

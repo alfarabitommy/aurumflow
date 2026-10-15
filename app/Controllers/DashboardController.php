@@ -18,11 +18,6 @@ use AurumFlow\Models\User;
  */
 final class DashboardController extends BaseController
 {
-    private const ROLE_LABELS = [
-        Constants::ROLE_OPERATOR => 'Pengelola (Operator)',
-        Constants::ROLE_INVESTOR => 'Mitra Pemodal (Investor)',
-    ];
-
     private const SETTING_LABELS = [
         'allocation_mode'                => 'Mode alokasi modal',
         'operator_base_quota_pct'        => 'Kuota serapan modal pengelola (%)',
@@ -57,21 +52,11 @@ final class DashboardController extends BaseController
     {
         $this->requireRole(Constants::ROLE_OPERATOR);
 
-        $role = (string) ($_SESSION['user_role'] ?? '');
-
         $burnFee = SystemSetting::get('default_burn_fee', '0.00');
         $operatorCut = SystemSetting::get('default_burn_fee_operator_cut', '0.00');
 
         $this->render('dashboard/index', [
             'title' => 'Dashboard',
-
-            'user' => [
-                'id'         => (string) ($_SESSION['user_id'] ?? ''),
-                'name'       => (string) ($_SESSION['user_name'] ?? ''),
-                'phone'      => (string) ($_SESSION['user_phone'] ?? ''),
-                'role'       => $role,
-                'role_label' => self::ROLE_LABELS[$role] ?? $role,
-            ],
 
             'activeUserCount' => User::countActive(),
 

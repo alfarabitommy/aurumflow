@@ -17,7 +17,12 @@ use AurumFlow\Services\TellerService;
  * Meja Kasir Hulu — "Quick Teller Mode" (Roadmap FASE 2, PRD Modul 1).
  *
  * Aturan yang dipegang controller ini:
- *   1. Hanya peran `operator` yang boleh membuka maupun mengirim layar kasir.
+ *   1. **Daftar izin eksplisit (*allow-list*).** Sejak Fase 7 layar ini menerima
+ *      peran `operator` **dan** `cashier` (`self::ALLOWED_ROLES`) — dan inilah
+ *      satu-satunya permukaan yang boleh dibuka kasir: meja kasir, tampilan
+ *      saldo Kas Meja Bakar + Emas holding, serta penerimaan dana talangan.
+ *      Setiap controller lain tetap menolak `ROLE_CASHIER`, sehingga isolasi
+ *      bersifat *allow-list*, bukan *deny-list*.
  *   2. CSRF diperiksa DUA kali (front controller + di sini) — pertahanan
  *      berlapis seperti AuthController.
  *   3. Submit ganda dicegah token sekali-pakai `_once` (bukan hanya oleh
@@ -39,6 +44,15 @@ final class TellerController extends BaseController
     private const RECENT_LIMIT = 3;
 
     /**
+     * Peran yang boleh membuka meja kasir — SATU-SATUNYA daftar izin kasir.
+     *
+     * Kasir adalah staf lapangan: ia menimbang, membayar, dan boleh meminjam kas
+     * (dana talangan), tetapi tidak pernah melihat rekonsiliasi, kelola modal,
+     * dasbor ringkasan, tata kelola akun, maupun portal mitra.
+     */
+    private const ALLOWED_ROLES = [Constants::ROLE_OPERATOR, Constants::ROLE_CASHIER];
+
+    /**
      * Layar kasir (GET).
      */
     public function index(): void
@@ -51,7 +65,7 @@ final class TellerController extends BaseController
      */
     public function store(): void
     {
-        $this->requireRole(Constants::ROLE_OPERATOR);
+        $this->requireRole(...self::ALLOWED_ROLES);
         $this->assertPostSecurity('Transaksi ganda diabaikan — tidak ada pencatatan baru.');
 
         $input = self::readInput();
@@ -100,7 +114,7 @@ final class TellerController extends BaseController
      */
     public function storeBridge(): void
     {
-        $this->requireRole(Constants::ROLE_OPERATOR);
+        $this->requireRole(...self::ALLOWED_ROLES);
         $this->assertPostSecurity('Talangan ganda diabaikan — tidak ada pencatatan baru.');
 
         $input = self::readBridgeInput();
@@ -191,7 +205,7 @@ final class TellerController extends BaseController
      */
     private function renderTeller(?string $error, array $input, int $status = 200, ?array $bridge = null): void
     {
-        $this->requireRole(Constants::ROLE_OPERATOR);
+        $this->requireRole(...self::ALLOWED_ROLES);
 
         $register = CashRegister::activeTeller();
 

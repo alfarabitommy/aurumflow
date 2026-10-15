@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AurumFlow\Controllers;
 
+use AurumFlow\Config\Constants;
 use AurumFlow\Helpers\Logger;
 use AurumFlow\Helpers\Security;
 use AurumFlow\Services\OnboardingService;
@@ -44,6 +45,8 @@ final class InvestorOnboardingController extends BaseController
      */
     public function show(): void
     {
+        $this->refuseCashier();
+
         $token = self::query('token');
         $invitee = OnboardingService::findInvitee($token);
 
@@ -59,6 +62,8 @@ final class InvestorOnboardingController extends BaseController
      */
     public function submit(): void
     {
+        $this->refuseCashier();
+
         // Pemeriksaan kedua di lapisan controller (pertahanan berlapis).
         $csrf = $_POST[Security::CSRF_FIELD] ?? null;
 
@@ -127,6 +132,24 @@ final class InvestorOnboardingController extends BaseController
     // -----------------------------------------------------------------------
     // Internal
     // -----------------------------------------------------------------------
+
+    /**
+     * Kasir tidak pernah menyentuh permukaan onboarding mitra (Fase 7).
+     *
+     * Halaman ini memang **publik** — otorisasinya adalah token undangan 64
+     * heksadesimal, bukan sesi. Namun halaman ini menampilkan data calon mitra
+     * (nama & nomor telepon), dan itu termasuk "data investor" yang wajib
+     * tertutup bagi kasir. Karena itu sesi kasir diarahkan ke beranda perannya
+     * **sebelum** token dibaca: tidak ada data mitra yang dirender dan tidak ada
+     * PIN yang dapat ditetapkan lewat sesi kasir. Pengunjung anonim dan mitra
+     * (mis. sesi lama) tidak terpengaruh — perilaku Fase 5 tetap utuh.
+     */
+    private function refuseCashier(): void
+    {
+        if ((string) ($_SESSION['user_role'] ?? '') === Constants::ROLE_CASHIER) {
+            $this->redirect(self::roleLandingPath(Constants::ROLE_CASHIER));
+        }
+    }
 
     /**
      * Render Layar A.

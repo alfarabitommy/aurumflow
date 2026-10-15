@@ -445,6 +445,20 @@ Qc::throws(
     PDOException::class
 );
 
+// Sejak Fase 7 peran `cashier` resmi ada — aditif, tanpa menggeser dua peran
+// lama (`qc_fase_7` membuktikan urutan ENUM & migrasi idempotennya).
+Qc::ok(
+    '4.12c.2',
+    'Peran kasir (Fase 7) diterima ENUM dan ditolak bila peran lama tergeser',
+    (static function (): bool {
+        $values = User::roleEnumValues();
+
+        return $values === ['operator', 'investor', 'cashier']
+            && in_array(Constants::ROLE_CASHIER, $values, true);
+    })(),
+    'ENUM users.role = ' . implode(', ', User::roleEnumValues())
+);
+
 Qc::throws(
     '4.12d',
     'hulu_transactions menolak status di luar holding/settled',

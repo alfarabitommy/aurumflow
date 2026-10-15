@@ -441,6 +441,12 @@ final class QcFixture
      */
     public static function ensureInstalled(): array
     {
+        // `schema.sql` memakai CREATE TABLE IF NOT EXISTS, sehingga basis data
+        // yang dipasang sebelum Fase 7 tidak ikut mengenal peran 'cashier'.
+        // Penyelarasan aditif ini memakai jalur yang sama dengan skrip migrasi
+        // lapangan (`database/migrate.php`) — satu pemilik: User::ensureRoleEnum().
+        User::ensureRoleEnum();
+
         Database::executeSqlFile(DATABASE_PATH . '/schema.sql');
         Database::executeSqlFile(DATABASE_PATH . '/seed.sql');
 
@@ -1419,6 +1425,151 @@ final class QcFixture
                 ['wallet_id' => $walletId]
             )['total'] ?? 0),
         ];
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase 7 — peran kasir meja bakar
+    // -----------------------------------------------------------------------
+
+    /**
+     * Akun kasir QC Fase 7 — peran `cashier`, PIN ber-pepper, TANPA dompet modal.
+     */
+    public const QC_CASHIER = [
+        'phone' => '089700000101',
+        'name'  => 'QC Kasir Meja Bakar',
+        'pin'   => '246810',
+    ];
+
+    /**
+     * Akun kasir kedua: sasaran uji reset PIN & nonaktifkan (dan pembanding
+     * "kasir lain" saat menilai kebocoran daftar).
+     */
+    public const QC_CASHIER_SECOND = [
+        'phone' => '089700000102',
+        'name'  => 'QC Kasir Cadangan',
+        'pin'   => '975310',
+    ];
+
+    /** Prefiks nomor akun kasir uji (dibersihkan setiap kali fixture dijalankan). */
+    public const QC_CASHIER_PREFIX = '0897%';
+
+    /**
+     * Siapkan dua akun kasir QC (idempotent).
+     *
+     * Akun kasir dibuat lewat `User::createWithPin()` — jalur yang sama dengan
+     * layar "Kelola Kasir" — sehingga PIN tersimpan ber-pepper dan tidak pernah
+     * sah di pintu kata sandi. Karena kasir bukan mitra modal, fixture ini
+     * sengaja **tidak** membuat `capital_wallets`.
+     *
+     * @return array{primary: array<string, mixed>, secondary: array<string, mixed>}
+     */
+    public static function seedQcCashier(): array
+    {
+        self::ensureInstalled();
+        self::purgeQcCashierAccounts();
+
+        $primary = self::ensureCashier(self::QC_CASHIER);
+        $secondary = self::ensureCashier(self::QC_CASHIER_SECOND);
+
+        return ['primary' => $primary, 'secondary' => $secondary];
+    }
+
+    /**
+     * Keadaan awal suite Fase 7: ENUM selaras, dua kasir uji aktif, pembatas
+     * percobaan kosong (uji 401/429 yang disengaja tidak meracuni suite lain).
+     *
+     * @return array{primary: array<string, mixed>, secondary: array<string, mixed>}
+     */
+    public static function resetCashierState(): array
+    {
+        $cashiers = self::seedQcCashier();
+        self::clearPinThrottle();
+
+        return $cashiers;
+    }
+
+    /**
+     * Hapus seluruh akun kasir uji berawalan `0897`.
+     *
+     * Tidak ada urutan FK yang dibutuhkan: kasir tidak punya dompet, permohonan
+     * penarikan, maupun distribusi.
+     */
+    public static function purgeQcCashierAccounts(): int
+    {
+        return Database::query(
+            'DELETE FROM `users` WHERE `phone_number` LIKE :prefix',
+            ['prefix' => self::QC_CASHIER_PREFIX]
+        )->rowCount();
+    }
+
+    /**
+     * Snapshot ringkas akun kasir — dipakai assertion diferensial "nol tulisan".
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public static function cashierSnapshot(): array
+    {
+        $rows = Database::fetchAll(
+            'SELECT `phone_number`, `full_name`, `role`, `is_active`, `password_hash` '
+            . 'FROM `users` WHERE `phone_number` LIKE :prefix ORDER BY `phone_number` ASC',
+            ['prefix' => self::QC_CASHIER_PREFIX]
+        );
+
+        $snapshot = [];
+
+        foreach ($rows as $row) {
+            $snapshot[(string) $row['phone_number']] = [
+                'name'   => (string) $row['full_name'],
+                'role'   => (string) $row['role'],
+                'active' => (int) $row['is_active'],
+                'hash'   => (string) $row['password_hash'],
+            ];
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * Buat / segarkan satu akun kasir uji.
+     *
+     * @param array{phone: string, name: string, pin: string} $definition
+     * @return array<string, mixed>
+     */
+    private static function ensureCashier(array $definition): array
+    {
+        $existing = User::findByPhoneNumber($definition['phone'], false);
+
+        if ($existing === null) {
+            $userId = User::createWithPin(
+                $definition['name'],
+                $definition['phone'],
+                $definition['pin'],
+                Constants::ROLE_CASHIER
+            );
+        } else {
+            $userId = (string) $existing['id'];
+
+            Database::update(
+                'users',
+                [
+                    'full_name' => $definition['name'],
+                    'role'      => Constants::ROLE_CASHIER,
+                    'is_active' => 1,
+                ],
+                '`id` = :id',
+                ['id' => $userId]
+            );
+
+            User::updatePin($userId, $definition['pin']);
+        }
+
+        $row = User::findByPhoneNumber($definition['phone'], false);
+
+        if ($row === null) {
+            throw new RuntimeException('Fixture kasir Fase 7 gagal dibuat: ' . $definition['phone']);
+        }
+
+        return $row;
     }
 
     /**

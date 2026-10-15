@@ -209,7 +209,35 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Tulis marker instalasi
+// 7. Pastikan ENUM users.role selaras schema.sql (Fase 7)
+// ---------------------------------------------------------------------------
+// `CREATE TABLE IF NOT EXISTS` tidak menyentuh tabel yang sudah ada, sehingga
+// basis data yang dipasang sebelum Fase 7 belum mengenal peran 'cashier'.
+// Pemeriksaan ini menjaga agar salinan schema.sql yang basi tidak lolos diam-
+// diam: instalasi baru harus langsung konsisten dengan ERD tiga peran.
+try {
+    if (User::ensureRoleEnum()) {
+        // Tabel lama diperluas di tempat: nilai baru ditambahkan di ujung ENUM.
+        // Tidak ada baris yang ditulis ulang (lihat User::ensureRoleEnum()).
+        $schemaCount++;
+    }
+} catch (Throwable $exception) {
+    $respond(500, 'INSTALL GAGAL saat menyelaraskan ENUM users.role: ' . $exception->getMessage());
+}
+
+$roleValues = User::roleEnumValues();
+
+if ($roleValues !== User::ROLE_ENUM_VALUES) {
+    $respond(
+        500,
+        'INSTALL GAGAL: users.role = [' . implode(', ', $roleValues) . '] '
+        . 'tidak sesuai ERD [' . implode(', ', User::ROLE_ENUM_VALUES) . ']. '
+        . 'Periksa database/schema.sql.'
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Tulis marker instalasi
 // ---------------------------------------------------------------------------
 if (!is_dir(STORAGE_PATH)) {
     set_error_handler(static fn (): bool => true);
@@ -239,7 +267,7 @@ if ($locked === false) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Selesai
+// 9. Selesai
 // ---------------------------------------------------------------------------
 $respond(
     200,
@@ -248,12 +276,13 @@ $respond(
     . 'Schema     : ' . $schemaCount . " statement\n"
     . 'Seed       : ' . $seedCount . " statement\n"
     . 'Pos kas    : ' . $registerCount . " baris\n"
+    . 'Peran      : [' . implode(', ', $roleValues) . "]\n"
     . 'Akun operator : ' . $operatorPhone . ' -> ' . $operatorAction['action']
     . ' (id ' . $operatorAction['user_id'] . ")\n"
     . 'Dompet Pengelola : ' . $operatorAction['wallet_id'] . " (tier operator)\n"
     . "Password awal wajib diganti setelah login pertama.\n\n"
     . "TINDAK LANJUT WAJIB:\n"
-    . "  1. HAPUS file database/install.php dari hosting.\n"
+    . "  1. HAPUS file database/install.php dan database/migrate.php dari hosting.\n"
     . "  2. Kosongkan INSTALL_TOKEN pada .env.\n"
     . '  3. Pastikan storage/installed.lock TIDAK dapat diakses via web.',
     true

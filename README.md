@@ -19,6 +19,8 @@ Mesin Settlement Harian) beserta dokumen spesifikasi otoritatifnya.
 | [`plan/Summary_Fase_4_AurumFlow.md`](plan/Summary_Fase_4_AurumFlow.md) | **Laporan eksekusi** Fase 4 |
 | [`plan/Plan_Fase_5_AurumFlow.md`](plan/Plan_Fase_5_AurumFlow.md) | Rencana eksekusi Fase 5 (dasbor blind, waiver digital, PWA) |
 | [`plan/Summary_Fase_5_AurumFlow.md`](plan/Summary_Fase_5_AurumFlow.md) | **Laporan eksekusi** Fase 5 |
+| [`plan/Plan_Fase_7_Kasir_AurumFlow.md`](plan/Plan_Fase_7_Kasir_AurumFlow.md) | Rencana eksekusi Fase 7 (peran kasir meja bakar, isolasi izin, tata kelola akun) |
+| [`plan/Summary_Fase_7_AurumFlow.md`](plan/Summary_Fase_7_AurumFlow.md) | **Laporan eksekusi** Fase 7 |
 | [`plan/Plan_Fix_Settlement_UI.md`](plan/Plan_Fix_Settlement_UI.md) | Perbaikan UX & pengiriman form layar rekonsiliasi/kasir (nilai awal Alpine, placeholder, assertion kontrak form) |
 | [`plan/Summary_Fix_Settlement_UI.md`](plan/Summary_Fix_Settlement_UI.md) | **Laporan eksekusi** perbaikan UX & pengiriman form layar rekonsiliasi/kasir |
 | [`plan/Summary_Fix_Disabled_Inputs.md`](plan/Summary_Fix_Disabled_Inputs.md) | **Laporan eksekusi** akar `422` "wajib diisi": kontrol `disabled` hilang dari payload form |
@@ -83,6 +85,8 @@ aurumflow/
 │   ├── Summary_Fase_5_AurumFlow.md
 │   ├── Plan_Fase_6_Talangan_AurumFlow.md
 │   ├── Summary_Fase_6_AurumFlow.md
+│   ├── Plan_Fase_7_Kasir_AurumFlow.md  # peran kasir: isolasi izin & tata kelola akun
+│   ├── Summary_Fase_7_AurumFlow.md
 │   └── Summary_UX_Fix.md     # perbaikan UX kolom kuota + determinisme dompet QC
 ├── docs/                     # 5 dokumen spesifikasi otoritatif
 ├── resources/css/            # sumber Tailwind (TIDAK disajikan ke peramban)
@@ -100,6 +104,8 @@ aurumflow/
 │   │   ├── AuthController.php
 │   │   ├── InvestorAuthController.php      # pintu PIN 6 digit mitra (Fase 5)
 │   │   ├── InvestorOnboardingController.php # klaim tautan undangan + waiver (Fase 5)
+│   │   ├── CashierAuthController.php       # pintu PIN 6 digit kasir meja bakar (Fase 7)
+│   │   ├── CashierController.php   # Kelola Kasir: buat akun, reset PIN, aktif/nonaktif (Fase 7)
 │   │   ├── CapitalController.php   # kelola modal (GET + 6 POST: setoran/mitra/kuota/transfer/penarikan/undangan)
 │   │   ├── DashboardController.php # ringkasan operator (operator-only sejak Fase 5)
 │   │   ├── ExportController.php    # laporan ramah cetak + CSV investor (Fase 5)
@@ -129,10 +135,13 @@ aurumflow/
 │   │   ├── CapitalService.php     # setoran modal, pindah kas, kuota, penarikan
 │   │   ├── OnboardingService.php  # klaim undangan, kebijakan PIN, teks waiver (Fase 5)
 │   │   ├── InvestorService.php    # view-model blind + penarikan mitra (Fase 5)
+│   │   ├── PinLoginService.php    # satu pemilik aturan pintu PIN: mitra & kasir (Fase 7)
+│   │   ├── CashierService.php     # tata kelola akun kasir: buat, reset PIN, status (Fase 7)
 │   │   └── BridgeLoanService.php  # fee talangan (nominal/persen), penerimaan kas, pengembalian T+1 (Fase 6)
 │   ├── Views/
 │   │   ├── layouts/          # app.php, auth.php, operator.php, investor.php, report.php
 │   │   ├── auth/login.php
+│   │   ├── cashier/login.php        # pintu PIN kasir (Fase 7)
 │   │   ├── dashboard/index.php
 │   │   ├── investor/login.php       # pintu PIN 6 digit
 │   │   ├── investor/onboarding.php  # Layar A: edukasi + waiver
@@ -141,12 +150,14 @@ aurumflow/
 │   │   ├── operator/teller.php      # kasir + modal "Terima Dana Talangan" (Fase 6)
 │   │   ├── operator/settlement.php  # rekonsiliasi & unggah nota terkompresi + kartu talangan
 │   │   ├── operator/capital.php     # kelola modal + simulator + antrean + undangan
+│   │   ├── operator/kasir.php       # kelola akun kasir (Fase 7)
 │   │   └── errors/           # 404.php, 500.php, error.php
 │   └── routes.php            # route table (data saja)
 ├── database/
 │   ├── schema.sql            # DDL ERD (10 tabel)
 │   ├── seed.sql              # system_settings + cash_registers
-│   └── install.php           # runner instalasi (WAJIB dihapus setelah dipakai)
+│   ├── install.php           # runner instalasi (WAJIB dihapus setelah dipakai)
+│   └── migrate.php           # migrasi aditif lapangan (Fase 7; idempoten)
 ├── public/                   # ← DOCUMENT ROOT
 │   ├── index.php             # front controller
 │   ├── .htaccess
@@ -164,7 +175,7 @@ aurumflow/
 ├── storage/
 │   ├── logs/                 # writable, di luar docroot
 │   └── throttle/             # pembatas percobaan login (Fase 5; isi tidak di-commit)
-└── tests/                    # harness QC + 12 suite
+└── tests/                    # harness QC + 13 suite
 ```
 
 **Aturan penting:** hanya isi `public/` yang boleh diakses lewat HTTP.
@@ -214,9 +225,14 @@ php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
 ```
 
 > **Identitas login adalah nomor telepon** (`users.phone_number`), bukan
-> username atau email — sesuai ERD. Tidak ada kolom email pada skema. Operator
-> masuk lewat `/login` dengan kata sandi; mitra masuk lewat `/investor/login`
-> dengan PIN 6 digit (Fase 5).
+> username atau email — sesuai ERD. Tidak ada kolom email pada skema. Ada **tiga
+> peran** (`users.role`) dengan satu pintu kredensial masing-masing: Pengelola
+> (`operator`) lewat `/login` dengan kata sandi, Mitra Pemodal (`investor`) lewat
+> `/investor/login` dengan PIN 6 digit (Fase 5), dan Kasir Meja Bakar (`cashier`)
+> lewat `/cashier/login` dengan PIN 6 digit (Fase 7). PIN kasir disimpan
+> ber-pepper pada kolom yang sama (`users.password_hash`) sehingga tidak pernah
+> sah di pintu kata sandi, dan pintu kata sandi menolak akun kasir secara
+> eksplisit.
 
 Hasilkan token dengan:
 
@@ -252,12 +268,30 @@ Instalasi akan: menerapkan `schema.sql` (10 tabel ERD), `seed.sql`
 marker `storage/installed.lock` — penyiapan akun + verifikasi pos kas
 dibungkus dalam **satu transaksi** PDO.
 
+### 4.4a Migrasi aditif (instalasi lama — Fase 7)
+
+Basis data yang sudah terpasang sebelum Fase 7 belum mengenal peran `cashier`.
+Jalankan **satu** perintah berikut (aman diulang, hanya menambah nilai ENUM di
+ujung `users.role`; tidak ada tabel/kolom baru dan tidak ada baris yang
+ditulis ulang):
+
+```bash
+php database/migrate.php
+```
+
+Skrip menolak berjalan bila `INSTALL_TOKEN` kosong (gate sama dengan
+`database/install.php`), melaporkan `diterapkan` atau `sudah diterapkan`, dan
+**tidak** menyentuh `storage/installed.lock`, sehingga instalasi yang sudah ada
+tidak pernah ditimpa.
+
 ### 4.5 TINDAK LANJUT WAJIB setelah instalasi
 
-1. **HAPUS** `database/install.php` dari hosting.
+1. **HAPUS** `database/install.php` dan `database/migrate.php` dari hosting.
 2. Kosongkan kembali `INSTALL_TOKEN` pada `.env`.
 3. Pastikan `storage/` tidak dapat diakses lewat web.
 4. Ganti password operator setelah login pertama.
+5. Bila basis data dipasang **sebelum** Fase 7, jalankan `php database/migrate.php`
+   (aditif, idempoten) lalu buat akun kasir dari **Kelola Kasir** (`/operator/kasir`).
 
 ---
 
@@ -279,7 +313,7 @@ bash tests/run_qc.sh
 `run_qc.sh` memakai `set -o pipefail`, jadi suite yang gagal benar-benar
 membuat skrip `exit 1` (sebelumnya status pipeline diambil dari `tee` sehingga
 kegagalan tersamarkan). Keluaran lengkapnya ditulis ke
-`storage/logs/qc-fase5.log`.
+`storage/logs/qc-fase7.log`.
 
 Semua suite juga dapat dijalankan sendiri-sendiri:
 
@@ -303,16 +337,17 @@ php tests/qc_routing.php
 | `qc_pdo` | 20 | Koneksi, charset, timezone, exception, singleton, presisi DECIMAL, transaksi commit/rollback |
 | `qc_formatter` | 43 | Format Rupiah & gramatur (kesamaan string persis), round-trip, locale, tanggal operasi |
 | `qc_security` | 32 | XSS escaping, password hashing, CSRF, session, `uuidV4()`, sumber acak |
-| `qc_seed` | 46 | Idempotensi DDL/seed, 10 tabel ERD, konvensi DECIMAL, FK, ENUM, guard installer |
+| `qc_seed` | 47 | Idempotensi DDL/seed, 10 tabel ERD, konvensi DECIMAL, FK, ENUM, guard installer |
 | `qc_roadmap_protocol_1` | 6 | **Protokol QC Manual 1** dari dokumen Roadmap (5 baris, 1:1) |
 | `qc_fase_2` | 66 | **Protokol QC Manual 2** + kalkulasi uang, parsing input, atomisitas, saldo kurang, anti double-submit, guard peran, pemindaian statis, kontrak form kasir (`type`/`inputmode`/`x-model.fill`, `init()` tanpa `$refs`, kontrol tidak `:disabled`) |
 | `qc_fase_3` | 98 | **Protokol QC Manual 3** (3.1 normal, 3.2 hari minus, 3.3 pemulihan defisit) + Smart Auto-Split, mesin defisit, unggah nota (gambar tiruan), atomisitas & berkas yatim, pemindaian statis, kontrak form rekonsiliasi (pre-fill, placeholder contoh, paritas kunci lintas lapis, `init()` tanpa `$refs`, kontrol tidak `:disabled`) |
 | `qc_fase_4` | 112 | **Protokol QC Manual 4** (waterfall 50 %/kuota prioritas/pro-rata, distribusi pool 20 % presisi sen, hari minus) + atomisitas setoran & Pindah Kas, antrean penarikan H-7 hari kerja, guard peran & `_once`, pemindaian statis, kontrak form kelola modal |
 | `qc_fase_5` | 130 | **Protokol QC Manual 5** (undangan sekali pakai + audit jejak hukum, kebijakan PIN & pepper gagal-tertutup, pembatas percobaan, isolasi blind dengan kanari, penarikan mandiri H-7, ekspor cetak/CSV, PWA, kontrak form & gating sadar peran, bootstrap Alpine pada setiap layout ber-Alpine) |
 | `qc_fase_6` | 105 | **Protokol QC Manual 6A** (dana talangan: fee nominal/persen dihitung peladen, penerimaan kas tiga tulisan + atomisitas & `_once`, auto-pay tutup buku dengan satu mutasi `out` per talangan, **isolasi pool mitra dibuktikan diferensial** (dengan vs tanpa talangan), hari minus & `fee_uncovered`, FIFO lintas siklus, penjagaan saldo, tabel ke-10 tanpa ALTER, **regresi UI**: baris fee talangan tidak pernah bergantung pada laba) |
+| `qc_fase_7` | 77 | **Protokol QC Manual 7** (peran kasir: ENUM aditif + migrasi idempoten, provisioning "Kelola Kasir" dengan PIN ber-pepper, pintu PIN `/cashier/login`, **matriks gating *allow-list*** GET+POST dengan nol tulisan & `_once` utuh, isolasi permukaan kasir lewat kanari & daftar terlarang, kontrak statis guard-first) |
 | `qc_sql_injection` | 15 | 8 payload injeksi (model + HTTP), integritas data, pemindaian statis |
 | `qc_routing` | 31 | Routing, CSRF, login/logout, cookie, header, proteksi file sensitif, aset |
-| **Total** | **704** | **0 FAIL** |
+| **Total** | **782** | **0 FAIL** |
 
 Exit code `0` = seluruh assertion lulus, `1` = ada yang gagal.
 
@@ -325,7 +360,7 @@ Alpine berjalan di peramban. Untuk itu tersedia probe Node yang menjalankan
 node tests/manual/js_form_init_check.js         # 47 assertion; tidak bagian dari run_qc.sh
 node tests/manual/js_capital_simulator_check.js # cermin waterfall JS vs peladen (Fase 4)
 node tests/manual/js_investor_check.js          # 45 assertion: papan angka PIN, dasbor mitra, bootstrap Alpine layout, salin tautan, scope SW (Fase 5)
-node tests/manual/js_bridge_fee_check.js        # 63 assertion: cermin fee talangan & klamp hak pengelola (Fase 6)
+node tests/manual/js_bridge_fee_check.js        # 65 assertion: cermin fee talangan & klamp hak pengelola (Fase 6)
 ```
 
 `qc_roadmap_protocol_1`, `qc_fase_2`, dan `qc_fase_3` mencetak tabel yang
@@ -359,10 +394,11 @@ setiap fase dapat ditandai berdasarkan bukti:
 ```
 
 > Suite `qc_seed`, `qc_roadmap_protocol_1`, **`qc_fase_2`**, **`qc_fase_3`**,
-> **`qc_fase_4`**, `qc_sql_injection`, dan `qc_routing` **mengubah data** pada
-> database yang ditunjuk `.env` (membuat skema, seed, akun operator, **saldo
-> kas, transaksi hulu, sesi settlement, dompet modal, distribusi dividen, dan
-> permohonan penarikan**). **Jangan arahkan ke database produksi.**
+> **`qc_fase_4`**, **`qc_fase_7`**, `qc_sql_injection`, dan `qc_routing`
+> **mengubah data** pada database yang ditunjuk `.env` (membuat skema, seed, akun
+> operator, **akun kasir uji, saldo kas, transaksi hulu, sesi settlement, dompet
+> modal, distribusi dividen, dan permohonan penarikan**). **Jangan arahkan ke
+> database produksi.**
 >
 > `qc_fase_2` menyetel saldo "Kas Meja Bakar" ke Rp 50.000.000 dan membersihkan
 > `hulu_transactions` + `cash_mutations` pos tersebut lewat
@@ -379,6 +415,18 @@ setiap fase dapat ditandai berdasarkan bukti:
 > (`QcFixture::resetCapitalState()`, `QcFixture::seedQcWallets()`) mengembalikan
 > saldo, kuota, dan status dompet ke titik awal serta membersihkan akun mitra uji
 > berawalan `0899`, sehingga suite dapat dijalankan berulang.
+>
+> `qc_fase_6` menyentuh `bridge_loans` **dan** saldo Kas Meja Bakar; fixture
+> (`QcFixture::resetBridgeState()`, `QcFixture::seedBridgeLoan()`) — yang juga
+> dipanggil `resetTellerState()` — mengembalikan keadaan itu sehingga suite dapat
+> dijalankan berulang.
+>
+> `qc_fase_7` menyentuh **akun kasir uji** (nomor berawalan `0897`), skema
+> `users.role`, dan `storage/throttle/` (uji `429` yang disengaja). Fixture
+> (`QcFixture::seedQcCashier()`, `QcFixture::resetCashierState()`,
+> `QcFixture::purgeQcCashierAccounts()`, `QcFixture::clearPinThrottle()`)
+> mengembalikan keadaan itu. Akun kasir **tidak** memiliki dompet modal,
+> sehingga pembersihannya cukup satu `DELETE` tanpa urutan FK seperti mitra.
 
 ---
 
@@ -681,6 +729,50 @@ menolak `database/install.php` yang dijalankan dua kali, jadi tabel baru dipasan
 `CREATE TABLE IF NOT EXISTS`, sehingga hanya tabel yang belum ada yang dibuat dan **tidak ada
 `ALTER TABLE`** pada tabel lama. Tidak ada langkah migrasi lain: sembilan tabel lama tetap utuh
 (dijaga assertion `qc_fase_6` H.6/H.7).
+
+### 7.14 Peran kasir meja bakar & isolasi izin (Fase 7) — WAJIB
+
+Meja Bakar dijaga staf, bukan pemilik. Sejak Fase 7 ada **tiga** peran pada `users.role` — dan
+tiap peran punya **satu** pintu kredensial:
+
+| Peran | Pintu masuk | Kredensial | Beranda |
+|---|---|---|---|
+| `operator` (Pengelola) | `/login` | kata sandi | `/dashboard` |
+| `investor` (Mitra Pemodal) | `/investor/login` | PIN 6 digit (+ pepper) | `/investor/dashboard` |
+| `cashier` (Kasir Meja Bakar) | `/cashier/login` | PIN 6 digit (+ pepper) | `/operator/teller` |
+
+**Isolasi bersifat *allow-list*.** Hanya tiga endpoint menerima peran `cashier`:
+`GET /operator/teller`, `POST /operator/teller`, dan `POST /operator/teller/talangan`
+(`TellerController::ALLOWED_ROLES`). Rekonsiliasi, kelola modal (+ 6 sub-POST), kelola kasir,
+dasbor ringkasan, dan seluruh portal mitra **tidak pernah** menyebut `Constants::ROLE_CASHIER`,
+sehingga sesi kasir yang mencobanya dijawab `302` ke `/operator/teller` **tanpa satu pun tulisan** —
+untuk GET maupun POST.
+
+**Guard-first.** `$this->requireRole(...)` adalah **pernyataan pertama** setiap method publik
+controller: ia berjalan sebelum pemeriksaan CSRF kedua, sebelum `Security::consumeFormToken()`, dan
+sebelum transaksi basis data. Akibatnya permintaan terlarang tidak menulis apa pun **dan tidak
+mengonsumsi** token `_once` milik pengirimnya (`qc_fase_7` D.5).
+
+**Kredensial & tata kelola akun.**
+
+* PIN kasir disimpan ber-pepper pada kolom `users.password_hash` yang sudah ada
+  (`Security::hashPin()`); tidak ada kolom baru. Konsekuensi yang disengaja: PIN kasir tidak pernah
+  sah di pintu kata sandi, dan pintu kata sandi **menolak** akun `cashier` secara eksplisit.
+* Pengelola membuat/menonaktifkan akun kasir dan mereset PIN dari **Kelola Kasir**
+  (`/operator/kasir`) — CSRF + token `_once` + PRG; `APP_PIN_PEPPER` kosong → gagal dengan pesan
+  (**nol baris**); PIN tidak pernah dirender kembali.
+* Akun kasir **tidak** mendapat `capital_wallets` (bukan mitra modal) dan tidak pernah menerima
+  bagi hasil.
+* Pembatas percobaan `PinThrottle` dipakai bersama pintu mitra: 5 kegagalan → kunci 15 menit per
+  `nomor + IP`.
+
+**Permukaan kasir.** Navigasi kasir hanya memuat meja kasir + keluar; header/kartu kasir tidak
+pernah memuat `Brankas Utama`, laba bersih, `pool mitra`, omzet, maupun data mitra pemodal.
+
+**Migrasi lapangan (aditif).** Nilai `'cashier'` ditambahkan **di ujung** `users.role` lewat
+`php database/migrate.php` (terjaga `INFORMATION_SCHEMA`, idempoten, gate `INSTALL_TOKEN`).
+Jangan pernah menyisipkan atau mengurutkan ulang nilai ENUM: MySQL/MariaDB menyimpannya sebagai
+indeks ordinal, sehingga penyisipan di tengah akan memetakan ulang arti baris lama.
 
 ---
 

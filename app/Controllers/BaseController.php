@@ -30,7 +30,9 @@ abstract class BaseController
      * Render view di dalam layout.
      *
      * Pesan flash (bila ada) diambil sekali pakai dan diteruskan ke layout
-     * sebagai `$flash` — pola POST-Redirect-GET.
+     * sebagai `$flash` — pola POST-Redirect-GET. Identitas pengguna yang sedang
+     * masuk diteruskan sebagai `$auth` (satu pemilik: `startUserSession()`),
+     * sehingga view/layout tidak perlu membaca `$_SESSION` sendiri.
      *
      * @param array<string, mixed> $data
      */
@@ -41,6 +43,7 @@ abstract class BaseController
 
         $data['app_name'] = App::name();
         $data['flash'] = $this->takeFlash();
+        $data['auth'] = self::currentAuth();
 
         extract($data, EXTR_SKIP);
 
@@ -111,10 +114,81 @@ abstract class BaseController
      * tidak ada dua tempat yang dapat berbeda pendapat tentang "rumah" sebuah
      * peran. Peran tak dikenal (sesi rusak) diperlakukan seperti operator,
      * sehingga `/dashboard` yang sudah operator-only akan mengalihkannya lagi.
+     *
+     * Sejak Fase 7 kasir mendarat di meja kasir — beranda yang memang menerima
+     * perannya — sehingga rantai pengalihan tidak pernah berputar.
      */
     public static function roleLandingPath(string $role): string
     {
-        return $role === Constants::ROLE_INVESTOR ? '/investor/dashboard' : '/dashboard';
+        return match ($role) {
+            Constants::ROLE_INVESTOR => '/investor/dashboard',
+            Constants::ROLE_CASHIER  => '/operator/teller',
+            default                  => '/dashboard',
+        };
+    }
+
+    /**
+     * Pintu masuk per peran — dipakai setelah keluar (logout).
+     *
+     * Satu pemilik bersama `roleLandingPath()`: pemetaan peran yang sama tidak
+     * boleh berbeda antara "ke mana setelah masuk" dan "ke mana setelah keluar".
+     */
+    public static function roleLoginPath(string $role): string
+    {
+        return match ($role) {
+            Constants::ROLE_INVESTOR => '/investor/login',
+            Constants::ROLE_CASHIER  => '/cashier/login',
+            default                  => '/login',
+        };
+    }
+
+    /**
+     * Tulis session pengguna setelah kredensial sah — satu-satunya tempat.
+     *
+     * Dipakai ketiga pintu masuk (kata sandi operator, PIN mitra, PIN kasir)
+     * supaya daftar kunci session tidak pernah berbeda antar pintu. Anti session
+     * fixation: ID session diregenerasi dan token CSRF diputar lebih dahulu.
+     *
+     * @param array<string, mixed> $user baris `users` hasil autentikasi peladen
+     */
+    protected function startUserSession(array $user): void
+    {
+        Security::regenerateSession();
+        Security::rotateCsrf();
+
+        $_SESSION['user_id']    = (string) ($user['id'] ?? '');
+        $_SESSION['user_name']  = (string) ($user['full_name'] ?? '');
+        $_SESSION['user_phone'] = (string) ($user['phone_number'] ?? '');
+        $_SESSION['user_role']  = (string) ($user['role'] ?? '');
+        $_SESSION['login_at']   = time();
+    }
+
+    /**
+     * Identitas pengguna untuk view & layout (nilai yang sudah di-escape saat
+     * dicetak). Hanya membaca session — nilai ini tidak pernah berasal dari
+     * formulir, sehingga tidak dapat dipalsukan pengirim.
+     *
+     * @return array{id: string, name: string, phone: string, role: string, role_label: string}
+     */
+    private static function currentAuth(): array
+    {
+        $role = isset($_SESSION['user_role']) && is_string($_SESSION['user_role'])
+            ? $_SESSION['user_role']
+            : '';
+
+        return [
+            'id'         => isset($_SESSION['user_id']) && is_string($_SESSION['user_id'])
+                ? $_SESSION['user_id']
+                : '',
+            'name'       => isset($_SESSION['user_name']) && is_string($_SESSION['user_name'])
+                ? $_SESSION['user_name']
+                : '',
+            'phone'      => isset($_SESSION['user_phone']) && is_string($_SESSION['user_phone'])
+                ? $_SESSION['user_phone']
+                : '',
+            'role'       => $role,
+            'role_label' => Constants::roleLabel($role),
+        ];
     }
 
     /**

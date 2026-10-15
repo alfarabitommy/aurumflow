@@ -279,7 +279,7 @@ $checkedAttribute = $applyFee ? 'checked' : '';
     <!--
         Dana talangan (Fase 6 — Layar B2). Pokok BUKAN pendapatan: ia hanya
         melintas di kas meja dan dikembalikan pada tutup buku berikutnya bersama
-        fee, yang dibebankan hanya pada hak laba pengelola.
+        fee, yang dibebankan hanya pada hak pengelola.
     -->
     <section class="af-card mt-5">
         <h2 class="af-card__title">Dana Talangan</h2>
@@ -539,8 +539,8 @@ $checkedAttribute = $applyFee ? 'checked' : '';
                 </dl>
 
                 <p class="text-[0.7rem] leading-relaxed text-muted">
-                    Fee dibebankan <strong>hanya</strong> pada hak laba pengelola (80 %); pool mitra (20 %)
-                    tidak tersentuh.
+                    Fee dibebankan <strong>hanya</strong> pada hak pengelola; dana mitra tidak
+                    tersentuh sama sekali.
                 </p>
 
                 <div class="grid gap-2 sm:grid-cols-2">

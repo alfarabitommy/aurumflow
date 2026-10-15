@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# AurumFlow — menjalankan seluruh QC (Fase 1 + Fase 2 + Fase 3 + Fase 4 + Fase 5 + Fase 6)
+# AurumFlow — menjalankan seluruh QC (Fase 1 s.d. Fase 7)
 # ============================================================================
 # Urutan bersifat sengaja:
 #   1. qc_pdo               — memastikan lapisan database sehat lebih dulu
@@ -13,8 +13,9 @@
 #   8. qc_fase_4            — Protokol QC Manual 4 (dompet modal, distribusi, penarikan)
 #   9. qc_fase_5            — Protokol QC Manual 5 (undangan, PIN, dasbor blind, PWA)
 #  10. qc_fase_6            — Protokol QC Manual 6A (dana talangan + isolasi pool mitra)
-#  11. qc_sql_injection     — butuh akun operator untuk uji lewat HTTP
-#  12. qc_routing           — butuh akun operator untuk uji login
+#  11. qc_fase_7            — Protokol QC Manual 7 (peran kasir: isolasi izin & permukaan)
+#  12. qc_sql_injection     — butuh akun operator untuk uji lewat HTTP
+#  13. qc_routing           — butuh akun operator untuk uji login
 #
 # Pemakaian:
 #   bash tests/run_qc.sh
@@ -29,7 +30,7 @@ set -o pipefail
 
 cd "$(dirname "$0")/.." || exit 1
 
-LOG_FILE="storage/logs/qc-fase6.log"
+LOG_FILE="storage/logs/qc-fase7.log"
 mkdir -p storage/logs
 
 SUITES=(
@@ -43,6 +44,7 @@ SUITES=(
     "qc_fase_4"
     "qc_fase_5"
     "qc_fase_6"
+    "qc_fase_7"
     "qc_sql_injection"
     "qc_routing"
 )
@@ -52,7 +54,7 @@ PASSED=()
 
 {
     echo "================================================================"
-    echo "AurumFlow — QC (Fase 1 + Fase 2 + Fase 3 + Fase 4 + Fase 5 + Fase 6)"
+    echo "AurumFlow — QC (Fase 1 s.d. Fase 7)"
     echo "Dijalankan : $(date '+%Y-%m-%d %H:%M:%S %Z')"
     echo "PHP        : $(php -r 'echo PHP_VERSION;')"
     echo "Database   : $(php -r 'require "app/Config/bootstrap.php"; echo AurumFlow\Config\Env::get("DB_NAME"), " @ ", AurumFlow\Config\Env::get("DB_HOST");') "
@@ -70,7 +72,7 @@ done
 {
     echo
     echo "================================================================"
-    echo "RINGKASAN QC (FASE 1 + FASE 2 + FASE 3 + FASE 4 + FASE 5 + FASE 6)"
+    echo "RINGKASAN QC (FASE 1 s.d. FASE 7)"
     echo "================================================================"
     echo "LULUS : ${#PASSED[@]}/${#SUITES[@]}  ${PASSED[*]:-}"
     echo "GAGAL : ${#FAILED[@]}/${#SUITES[@]}  ${FAILED[*]:-}"

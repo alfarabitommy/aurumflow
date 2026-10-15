@@ -12,6 +12,10 @@ declare(strict_types=1);
  *
  * Isi dan nilai yang ditampilkan SENGAJA tidak berubah dari Fase 1 karena
  * diuji assertion QC HTTP (`qc_routing`).
+ *
+ * Sejak Fase 7 identitas pengguna datang dari BaseController sebagai `$auth`
+ * (satu pemilik: `startUserSession()`), bukan dari array `user` yang disusun
+ * controller — sehingga layar ini tidak punya sumber identitas kedua.
  */
 
 use AurumFlow\Config\App;
@@ -19,7 +23,7 @@ use AurumFlow\Config\Constants;
 use AurumFlow\Helpers\Formatter;
 use AurumFlow\Helpers\Security;
 
-$user = is_array($user ?? null) ? $user : [];
+$auth = is_array($auth ?? null) ? $auth : [];
 $settings = is_array($settings ?? null) ? $settings : [];
 $settingLabels = is_array($settingLabels ?? null) ? $settingLabels : [];
 $samples = is_array($samples ?? null) ? $samples : [];
@@ -35,12 +39,12 @@ $sampleLabels = [
     'gram_negatif'   => 'Gramatur — negatif',
 ];
 
-$isOperator = ($user['role'] ?? '') === Constants::ROLE_OPERATOR;
+$isOperator = ($auth['role'] ?? '') === Constants::ROLE_OPERATOR;
 ?>
 <section class="af-card">
     <div class="af-glow" aria-hidden="true"></div>
 
-    <h1 class="af-card__title">Selamat datang, <?= Security::e($user['name'] ?? '') ?></h1>
+    <h1 class="af-card__title">Selamat datang, <?= Security::e($auth['name'] ?? '') ?></h1>
     <p class="af-card__subtitle">
         Fase 1 (fondasi arsitektur) dan Fase 2 (meja kasir hulu) sudah aktif.
         Halaman ini membuktikan bahwa session, skema ERD, model, dan formatter
@@ -48,24 +52,26 @@ $isOperator = ($user['role'] ?? '') === Constants::ROLE_OPERATOR;
     </p>
 
     <?php if ($isOperator): ?>
-        <div class="mt-4 grid gap-3 sm:grid-cols-3">
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <a class="af-btn af-btn--primary"
                href="<?= Security::e(App::url('operator/teller')) ?>">Buka Meja Kasir Hulu</a>
             <a class="af-btn af-btn--ghost"
                href="<?= Security::e(App::url('operator/settlement')) ?>">Buka Rekonsiliasi Toko</a>
             <a class="af-btn af-btn--ghost"
                href="<?= Security::e(App::url('operator/capital')) ?>">Kelola Modal &amp; Likuiditas</a>
+            <a class="af-btn af-btn--ghost"
+               href="<?= Security::e(App::url('operator/kasir')) ?>">Kelola Kasir</a>
         </div>
     <?php endif; ?>
 
     <dl class="af-facts mt-5">
         <div>
             <dt>Nomor telepon</dt>
-            <dd><?= Security::e($user['phone'] ?? '') ?></dd>
+            <dd><?= Security::e($auth['phone'] ?? '') ?></dd>
         </div>
         <div>
             <dt>Peran</dt>
-            <dd><?= Security::e($user['role_label'] ?? '') ?></dd>
+            <dd><?= Security::e($auth['role_label'] ?? '') ?></dd>
         </div>
         <div>
             <dt>Pengguna aktif</dt>
