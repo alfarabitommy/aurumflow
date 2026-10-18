@@ -18,6 +18,16 @@ use AurumFlow\Models\User;
  */
 final class DashboardController extends BaseController
 {
+    /**
+     * Kerangka 2-tier yang sama dengan layar operator lain.
+     *
+     * Layout dipilih di sini (bukan di view): `BaseController::render()` memilih
+     * berkas layout di PHP, sehingga dashboard tidak mungkin memilihnya sendiri.
+     * Nilai ini juga yang membuat subjudul baris pertama layout terisi dari
+     * `$title` halaman — lihat `plan/Plan_Unify_UI_AurumFlow.md` (C1).
+     */
+    private const LAYOUT = 'operator';
+
     private const SETTING_LABELS = [
         'allocation_mode'                => 'Mode alokasi modal',
         'operator_base_quota_pct'        => 'Kuota serapan modal pengelola (%)',
@@ -83,6 +93,6 @@ final class DashboardController extends BaseController
                 'gram_bulat'     => Formatter::gram(1000),
                 'gram_negatif'   => Formatter::gram(-2.5),
             ],
-        ]);
+        ], self::LAYOUT);
     }
 }

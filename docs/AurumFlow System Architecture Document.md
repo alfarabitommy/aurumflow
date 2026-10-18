@@ -96,7 +96,8 @@ aurumflow/
 │   │   ├── PinThrottle.php           # Pembatas percobaan PIN/kata sandi berbasis berkas (Fase 5)
 │   │   └── Logger.php                # Log berkas terstruktur (tanpa data sensitif)
 │   └── Views/
-│       ├── layouts/                  # app.php (operator), auth.php, operator.php,
+│       ├── layouts/                  # app.php (shell default/legacy), auth.php,
+│       │                             # operator.php (2-tier: dashboard + seluruh layar operator),
 │       │                             # investor.php (Fase 5), report.php (ramah cetak)
 │       ├── auth/                     # Halaman login kata sandi
 │       ├── cashier/                  # Pintu PIN kasir meja bakar (Fase 7)
@@ -291,8 +292,15 @@ Aturan ini mencegah peretasan melalui *web shell* jika ada berkas berbahaya yang
   (`TellerController`, `Views/operator/teller.php`, `Views/layouts/operator.php`,
   `Views/cashier/login.php`, `TellerService`, `BridgeLoanService`) tidak boleh menyebut
   `BRANKAS_NAME`/`findBrankas`, dompet modal (`CapitalWallet`), `SystemSetting`, maupun angka
-  bagi hasil (`laba bersih`, `pool mitra`, `omzet`). Navigasi operator (Rekonsiliasi, Kelola Modal,
-  Kelola Kasir, Dashboard) disembunyikan bagi kasir di `Views/layouts/operator.php`.
+  bagi hasil (`laba bersih`, `pool mitra`, `omzet`). Navigasi operator (Dashboard, Rekonsiliasi,
+  Kelola Modal, Kelola Kasir) disembunyikan bagi kasir di `Views/layouts/operator.php`.
+* **Satu kerangka 2-tier untuk seluruh halaman pengelola.** `/dashboard` dan semua layar
+  `/operator/*` memakai `Views/layouts/operator.php`; layout-nya dipilih controller
+  (`render($view, $data, self::LAYOUT)`), sehingga dashboard tidak lagi memakai shell 1-tier
+  `Views/layouts/app.php` (layout itu tetap ada sebagai default `render()` dan dijaga
+  `qc_fase_5` I.10). Baris bawah layout adalah navigasi tab tersegmen — 5 tab untuk operator,
+  1 tab untuk kasir — dengan penanda aktif diturunkan dari `REQUEST_URI` dan penggeseran
+  horizontal pada ponsel.
 
 ---
 

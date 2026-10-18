@@ -1825,10 +1825,56 @@ Qc::ok(
 );
 
 Qc::ok(
+    'H.11b',
+    'Dashboard memakai kerangka 2-tier: controller menyatakan LAYOUT = operator dan meneruskannya',
+    (static function (): bool {
+        $source = (string) file_get_contents(APP_PATH . '/Controllers/DashboardController.php');
+
+        return str_contains($source, "private const LAYOUT = 'operator';")
+            && str_contains($source, 'self::LAYOUT');
+    })(),
+    'wiring layout dashboard (Plan_Unify_UI_AurumFlow C1)'
+);
+
+Qc::ok(
+    'H.11c',
+    'Baris navigasi layout operator memuat tab Dashboard dan menggeser horizontal di ponsel',
+    str_contains($layoutView, "'label' => 'Dashboard'")
+        && str_contains($layoutView, "'label' => 'Kelola Kasir'")
+        && str_contains($layoutView, 'overflow-x-auto')
+        && str_contains($layoutView, 'shrink-0'),
+    'kontrak tab tersegmen (Plan_Unify_UI_AurumFlow § 4.3–4.4)'
+);
+
+Qc::ok(
     'H.12',
     'Dashboard menyediakan pintu role-aware ke layar modal',
     str_contains((string) file_get_contents(VIEW_PATH . '/dashboard/index.php'), "App::url('operator/capital')"),
     'tautan dashboard'
+);
+
+$dashboardPage = QcHttp::request('GET', '/dashboard', ['cookie_jar' => $operatorJar]);
+
+Qc::ok(
+    'H.12b',
+    'GET /dashboard merender kerangka 2-tier yang sama: lima tab operator + penanda tab aktif',
+    $dashboardPage['status'] === 200
+        && str_contains((string) $dashboardPage['body'], 'aria-current="page"')
+        && (static function () use ($dashboardPage): bool {
+            $hrefs = ['/dashboard', '/operator/teller', '/operator/settlement', '/operator/capital', '/operator/kasir'];
+
+            foreach ($hrefs as $href) {
+                if (!str_contains((string) $dashboardPage['body'], 'href="' . $href . '"')) {
+                    return false;
+                }
+            }
+
+            return true;
+        })()
+        // `max-w-3xl` hanya dipakai layouts/app.php: shell 1-tier tidak boleh
+        // lagi merender halaman ini.
+        && !str_contains((string) $dashboardPage['body'], 'max-w-3xl'),
+    'status=' . $dashboardPage['status'] . ' (Plan_Unify_UI_AurumFlow § 8)'
 );
 
 Qc::ok(

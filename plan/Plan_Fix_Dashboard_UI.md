@@ -1,5 +1,14 @@
 # Plan Fix Dashboard UI — Pintasan "Kelola Kasir"
 
+> **Sebagian sudah digantikan (Fase 8).** `/dashboard` kini memakai kerangka
+> 2-tier `layouts/operator.php` (lebar `max-w-2xl`, bukan `max-w-3xl`), dan label
+> keempat tombol diselaraskan dengan label tab (`Kasir`, `Rekonsiliasi`,
+> `Kelola Modal`, `Kelola Kasir`). Karena itu catatan lebar pada § 3 dan usulan
+> navbar `Views/layouts/app.php` pada § 6 **tidak lagi berlaku**. Yang tetap:
+> grid `mt-4 grid gap-3 sm:grid-cols-2` berisi empat tombol dan tautan
+> `App::url('operator/capital')` yang diuji `qc_fase_4` H.12. Lihat
+> `plan/Plan_Unify_UI_AurumFlow.md` dan `plan/Summary_Unify_UI_AurumFlow.md`.
+
 Perbaikan UX pascarilis Fase 7: kartu sambutan `/dashboard` belum punya pintasan
 ke layar provisioning kasir yang baru (`/operator/kasir`).
 
@@ -66,7 +75,8 @@ maupun SQL di view.
 - Catatan lebar: layout `app.php` memakai `max-w-3xl` (768px), jadi baris 4
   kolom hanya memberi ~184px per tombol dan label panjang ("Buka Rekonsiliasi
   Toko", "Kelola Modal & Likuiditas") akan membungkus — 2×2 adalah bentuk
-  simetris yang benar untuk lebar ini.
+  simetris yang benar untuk lebar ini. **Digantikan Fase 8** (`max-w-2xl` +
+  label tab) — lihat banner di atas.
 
 ## 4. Validasi — tanpa perubahan backend
 

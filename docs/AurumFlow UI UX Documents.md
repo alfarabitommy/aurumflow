@@ -136,10 +136,16 @@ Layar kerja utama operator di samping timbangan digital.
 * **Reaktivitas Alpine.js:** Saat digit gram atau harga diubah, angka "TOTAL KAS BERSIH KELUAR" langsung terhitung seketika tanpa jeda reload halaman.
 
 > **Catatan Fase 7 — Layar B dipakai dua peran.** Layar ini adalah satu-satunya permukaan yang
-> boleh dibuka **kasir** (lihat § 7). Bagi kasir, navbar hanya memuat menu **Kasir** + **Keluar**,
-> tombol **Dashboard** tidak dirender, dan kartu/header hanya menampilkan saldo **Kas Meja Bakar**
-> serta Emas *holding* — `Brankas Utama` tidak pernah muncul di markup. Judul header tetap
-> "AURUMFLOW · Meja Hulu" agar kasir tidak perlu menyesuaikan kebiasaan kerja.
+> boleh dibuka **kasir** (lihat § 7). Bagi kasir, navbar hanya memuat tab **Kasir** + tombol
+> **Keluar**, tidak ada tab **Dashboard** maupun menu pengelola lain, dan kartu/header hanya
+> menampilkan saldo **Kas Meja Bakar** serta Emas *holding* — `Brankas Utama` tidak pernah muncul
+> di markup. Subjudul header tetap "AURUMFLOW · Meja Hulu" agar kasir tidak perlu menyesuaikan
+> kebiasaan kerja.
+>
+> **Catatan Fase 8 — satu kerangka 2-tier.** `/dashboard` kini memakai layout yang sama
+> (`layouts/operator.php`), sehingga subjudul baris atas bersifat adaptif: operator melihat judul
+> halaman (`Dashboard`, `Meja Kasir Hulu`, `Rekonsiliasi & Settlement`, `Kelola Modal &
+> Likuiditas`, `Kelola Kasir`), kasir tetap melihat "Meja Hulu". Rincian navigasi ada di § 7.2.
 
 ---
 
@@ -622,16 +628,36 @@ belajar, tetapi kredensial, gerbang peran, dan berandanya berbeda.
 
 ### 7.2 Navigasi sadar peran (`layouts/operator.php`)
 
+**Satu kerangka 2-tier untuk semua halaman pengelola.** Sejak Fase 8 `/dashboard` dan seluruh
+layar `/operator/*` memakai layout yang sama (`layouts/operator.php`): baris atas identitas,
+baris bawah navigasi tab tersegmen. Tidak ada lagi lompatan visual antara dashboard (dulu
+`layouts/app.php` bergaya 1-tier) dan layar operasional.
+
+Baris atas: logo **AURUMFLOW** + subjudul halaman (adaptif — `$title` halaman untuk operator,
+tetap "Meja Hulu" untuk kasir), nama + label peran pengguna, dan tombol **Keluar**. Tombol
+**Dashboard** yang dulu menempel di header **dihapus** karena kini menjadi tab pertama.
+
+Baris bawah: lima tab untuk operator (`Dashboard`, `Kasir`, `Rekonsiliasi`, `Kelola Modal`,
+`Kelola Kasir`) dan **satu** tab untuk kasir (`Kasir`). Penanda tab aktif diturunkan dari
+`REQUEST_URI` — bukan dari controller — sehingga sub-halaman seperti `/operator/capital/topup`
+tetap menandai menu induknya. Pada ponsel baris ini menggeser **horizontal**
+(`overflow-x-auto` + `shrink-0` per tab), jadi label tidak pernah terlipat.
+
 | Elemen | Operator | Kasir |
 | :--- | :---: | :---: |
-| Menu **Kasir** (`/operator/teller`) | ✅ | ✅ |
-| Menu **Rekonsiliasi** (`/operator/settlement`) | ✅ | ⛔ disembunyikan |
-| Menu **Kelola Modal** (`/operator/capital`) | ✅ | ⛔ disembunyikan |
-| Menu **Kelola Kasir** (`/operator/kasir`) | ✅ | ⛔ disembunyikan |
-| Tombol **Dashboard** di header | ✅ | ⛔ disembunyikan |
+| Tab **Dashboard** (`/dashboard`) | ✅ | ⛔ disembunyikan |
+| Tab **Kasir** (`/operator/teller`) | ✅ | ✅ |
+| Tab **Rekonsiliasi** (`/operator/settlement`) | ✅ | ⛔ disembunyikan |
+| Tab **Kelola Modal** (`/operator/capital`) | ✅ | ⛔ disembunyikan |
+| Tab **Kelola Kasir** (`/operator/kasir`) | ✅ | ⛔ disembunyikan |
+| Subjudul baris atas | `$title` halaman (mis. "Rekonsiliasi & Settlement") | "Meja Hulu" |
 | Label identitas di header | nama + "Pengelola (Operator)" | nama + "Kasir Meja Bakar" |
 | Widget sticky header | Saldo Kas Meja Bakar + Emas holding | idem (tanpa Brankas) |
 | Tombol **Keluar** | ✅ | ✅ |
+
+Tidak ada lagi tombol pintasan **Dashboard** di header: navigasi tab di baris kedua adalah
+satu-satunya pemilik perpindahan antar-layar, dan grid aksi cepat pada `/dashboard` memakai
+urutan serta label yang sama persis dengan empat tab operasional.
 
 Penyembunyian ini **kosmetik, bukan pengaman**: rute terlarang tetap dijaga peladen dan menjawab
 `302` ke `/operator/teller` tanpa tulisan.

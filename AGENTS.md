@@ -440,12 +440,15 @@ Peringatan yang sudah terverifikasi:
 - `git status` bersih, tanpa artefak (`tests/.tmp/`, `storage/installed.lock`,
   `*.log`).
 
-Baseline saat ini: **13 suite, 782 assertion, 0 gagal**. Rincian dan item
+Baseline saat ini: **13 suite, 785 assertion, 0 gagal**. Rincian dan item
 terbuka ada di `plan/Summary_Fase_7_AurumFlow.md` (lalu `Summary_Fase_6`,
 `Summary_Fase_5`, `Summary_Fase_4`, `Summary_Fase_3`, `Summary_Fase_2`, dan
 `Summary_Fase_1`), serta `plan/Plan_Fix_Settlement_UI.md`,
 `plan/Summary_Fix_Disabled_Inputs.md`, dan
 `plan/Summary_Fix_Investor_Login_Alpine.md` untuk perbaikan UX/form pascarilis.
+Unifikasi kerangka 2-tier pengelola (`/dashboard` + seluruh layar `/operator/*`
+memakai `layouts/operator.php`) dijelaskan di `plan/Plan_Unify_UI_AurumFlow.md`
+dan `plan/Summary_Unify_UI_AurumFlow.md`.
 
 ## Menambah test
 

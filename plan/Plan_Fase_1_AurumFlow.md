@@ -772,6 +772,44 @@ dari kontrak data):
    tidak menyebutnya; SAD §3 mencantumkannya untuk UI. Fase 1 tetap memakai
    CSS/JS minimal (`public/assets/`).
 
+## A.4b Penyimpangan tampilan: dashboard memakai kerangka 2-tier (Fase 8)
+
+Rencana & hasilnya menyatukan UI/UX pengelola — lihat
+`plan/Plan_Unify_UI_AurumFlow.md` dan `plan/Summary_Unify_UI_AurumFlow.md`.
+
+1. **`/dashboard` tidak lagi memakai `layouts/app.php`.** Layout dipilih di PHP
+   (`BaseController::render($view, $data, $layout = 'app')`); `DashboardController`
+   sekarang menyatakan `private const LAYOUT = 'operator';` dan meneruskannya —
+   persis pola `TellerController`/`SettlementController`/`CapitalController`/
+   `CashierController`. Dashboard adalah satu-satunya pemakai nilai default
+   `'app'`, sehingga tidak ada controller lain yang perlu disentuh.
+2. **`layouts/app.php` TIDAK dihapus.** Ia tetap menjadi default `render()` dan
+   dijaga assertion `qc_fase_5` I.10 (lima layout wajib ada dan memuat
+   `manifest.json` + `data-app-base`). Menghapusnya berarti mengubah kontrak QC,
+   bukan sekadar merapikan kode.
+3. **Navigasi baris kedua menjadi 5 tab (operator) / 1 tab (kasir)** dengan
+   penanda aktif diturunkan dari `REQUEST_URI` dan penggeseran horizontal pada
+   ponsel (`overflow-x-auto` + `shrink-0`). Tombol **Dashboard** di baris
+   pertama dihapus karena tujuan itu sudah menjadi tab pertama — inilah
+   "redundansi tombol aksi cepat" yang dilaporkan PO.
+4. **Subjudul baris pertama adaptif** (`$title` halaman untuk operator, tetap
+   "Meja Hulu" untuk kasir) supaya header tidak lagi berbunyi "Meja Hulu" pada
+   layar dashboard, rekonsiliasi, kelola modal, dan kelola kasir.
+5. **Blok identitas baris pertama diperbaiki.** Sebelumnya `hidden … sm:block`,
+   padahal `.sm\:block` **tidak pernah ada** di `public/assets/css/app.min.css`
+   (kelas `sm:` yang terkompilasi hanya `sm:grid-cols-2/3`) sementara `.hidden`
+   ada — sehingga nama + label peran tak pernah tampil di lebar mana pun. Diganti
+   `block min-w-0` + `truncate`, seluruhnya kelas yang sudah terkompilasi.
+6. **Nol kompilasi ulang Tailwind.** `app.min.css` dan `public/assets/js/app.js`
+   tidak disentuh, jadi `CACHE_NAME` di `public/sw.js` tetap
+   `aurumflow-shell-v2` (`qc_fase_6` G.17/G.18, `qc_fase_7` F.7). Kelas yang
+   tidak ada di bundel (`whitespace-nowrap`, `flex-nowrap`, `flex-1`, `-mx-4`,
+   `sm:block`) **tidak** dipakai — sekaligus menjaga batas < 30 KB pada
+   `qc_fase_2` H.7.
+7. **Dokumen `docs/` diperbarui lebih dahulu** (UI/UX § 7.2 + catatan Fase 7/8,
+   Roadmap pada baris "navigasi sadar peran", SAD pohon direktori + kontrak
+   kerangka layout), sesuai urutan presedensi A.1.
+
 ## A.5 Struktur direktori final
 
 ```

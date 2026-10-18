@@ -11,11 +11,18 @@ declare(strict_types=1);
  * masuk ke meja kasir hulu; dasbor "blind" untuk investor dibangun di Fase 5.
  *
  * Isi dan nilai yang ditampilkan SENGAJA tidak berubah dari Fase 1 karena
- * diuji assertion QC HTTP (`qc_routing`).
+ * diuji assertion QC HTTP (`qc_routing`): nomor telepon, label peran, sampel
+ * formatter, dan nilai `system_settings` wajib tetap tercetak.
  *
  * Sejak Fase 7 identitas pengguna datang dari BaseController sebagai `$auth`
  * (satu pemilik: `startUserSession()`), bukan dari array `user` yang disusun
  * controller — sehingga layar ini tidak punya sumber identitas kedua.
+ *
+ * Sejak Fase 8 halaman ini dirender di dalam kerangka 2-tier
+ * `layouts/operator.php` (dipilih `DashboardController::LAYOUT`), sehingga
+ * header/tab-nya identik dengan layar operator lain dan grid aksi cepat di
+ * bawah ini hanya mengulang empat tab operasional — lihat
+ * `plan/Plan_Unify_UI_AurumFlow.md` (C5).
  */
 
 use AurumFlow\Config\App;
@@ -46,19 +53,21 @@ $isOperator = ($auth['role'] ?? '') === Constants::ROLE_OPERATOR;
 
     <h1 class="af-card__title">Selamat datang, <?= Security::e($auth['name'] ?? '') ?></h1>
     <p class="af-card__subtitle">
-        Fase 1 (fondasi arsitektur) dan Fase 2 (meja kasir hulu) sudah aktif.
-        Halaman ini membuktikan bahwa session, skema ERD, model, dan formatter
-        bekerja bersama.
+        Ringkasan operasional hari ini. Gunakan tab di baris atas untuk berpindah
+        antar layar pengelola — kartu di bawah memuat parameter sistem yang sedang
+        berlaku dan contoh format angka yang dipakai seluruh modul.
     </p>
 
     <?php if ($isOperator): ?>
+        <!-- Urutan & label grid ini 1:1 dengan empat tab operasional pada
+             layouts/operator.php (tab pertama, Dashboard, adalah halaman ini). -->
         <div class="mt-4 grid gap-3 sm:grid-cols-2">
             <a class="af-btn af-btn--primary"
-               href="<?= Security::e(App::url('operator/teller')) ?>">Buka Meja Kasir Hulu</a>
+               href="<?= Security::e(App::url('operator/teller')) ?>">Kasir</a>
             <a class="af-btn af-btn--ghost"
-               href="<?= Security::e(App::url('operator/settlement')) ?>">Buka Rekonsiliasi Toko</a>
+               href="<?= Security::e(App::url('operator/settlement')) ?>">Rekonsiliasi</a>
             <a class="af-btn af-btn--ghost"
-               href="<?= Security::e(App::url('operator/capital')) ?>">Kelola Modal &amp; Likuiditas</a>
+               href="<?= Security::e(App::url('operator/capital')) ?>">Kelola Modal</a>
             <a class="af-btn af-btn--ghost"
                href="<?= Security::e(App::url('operator/kasir')) ?>">Kelola Kasir</a>
         </div>
