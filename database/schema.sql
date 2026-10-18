@@ -275,3 +275,102 @@ CREATE TABLE IF NOT EXISTS `bridge_loans` (
     CONSTRAINT `fk_bridge_register` FOREIGN KEY (`register_id`) REFERENCES `cash_registers` (`id`)
         ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 11. miners — master petani/penambang (Fase 8)
+-- ----------------------------------------------------------------------------
+-- Data dikumpulkan BERTAHAP: saat pertama kali meminjam, hanya `full_name` yang
+-- wajib. `phone_number` dan `location` menyusul pada kedatangan berikutnya,
+-- supaya kasir tidak menahan antrean dan petani baru tidak merasa diinterogasi.
+--
+-- `phone_number` NULL-able namun UNIQUE: banyak baris NULL diperbolehkan (petani
+-- tanpa nomor), sementara satu nomor tidak boleh menjadi dua identitas piutang.
+-- Nomor yang dipakai bersama dalam satu keluarga → daftarkan tanpa nomor.
+CREATE TABLE IF NOT EXISTS `miners` (
+    `id`           CHAR(36)     NOT NULL,
+    `full_name`    VARCHAR(100) NOT NULL COMMENT 'Wajib — identitas minimum saat mendaftar',
+    `phone_number` VARCHAR(20)  NULL COMMENT 'Opsional; UNIQUE, NULL boleh berulang',
+    `location`     VARCHAR(100) NULL COMMENT 'Opsional — kampung/sungai/patok',
+    `created_at`   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at`   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uq_miner_phone` (`phone_number`),
+    KEY `idx_miner_name` (`full_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 12. miner_loans — satu baris per pencairan kasbon + saldo berjalan (Fase 8)
+-- ----------------------------------------------------------------------------
+-- `issued_on` adalah TANGGAL BISNIS pencairan (bukan `created_at`), karena batas
+-- harian `system_settings.daily_loan_limit` dihitung per tanggal itu.
+--
+-- `balance_remaining` disimpan (bukan SUM saat baca) supaya laporan tidak perlu
+-- menjumlah ulang; invariant yang dijaga peladen:
+--   principal_amount − SUM(angsuran pada ledger) = balance_remaining
+--
+-- `issued_by` memakai ON DELETE SET NULL (bukan RESTRICT) karena akun staf boleh
+-- dihapus sementara riwayat kasbon wajib tetap terbaca; `miner_id` memakai
+-- RESTRICT karena petani yang punya riwayat tidak boleh hilang.
+CREATE TABLE IF NOT EXISTS `miner_loans` (
+    `id`                CHAR(36)      NOT NULL,
+    `miner_id`          CHAR(36)      NOT NULL,
+    `principal_amount`  DECIMAL(14,2) NOT NULL COMMENT 'Pokok saat dicairkan',
+    `balance_remaining` DECIMAL(14,2) NOT NULL COMMENT 'Sisa utang berjalan',
+    `status`            ENUM('open', 'settled') NOT NULL DEFAULT 'open',
+    `issued_on`         DATE          NOT NULL COMMENT 'Tanggal pencairan — dasar batas harian',
+    `issued_by`         CHAR(36)      NULL COMMENT 'users.id pencatat (NULL bila akun dihapus)',
+    `settled_at`        DATETIME      NULL,
+    `notes`             TEXT          NULL,
+    `created_at`        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at`        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_loan_miner_status` (`miner_id`, `status`),
+    KEY `idx_loan_issued_on` (`issued_on`),
+    KEY `idx_loan_status` (`status`),
+    CONSTRAINT `fk_loan_miner` FOREIGN KEY (`miner_id`) REFERENCES `miners` (`id`)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `fk_loan_issuer` FOREIGN KEY (`issued_by`) REFERENCES `users` (`id`)
+        ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- 13. miner_loan_ledger — riwayat kas kasbon (Fase 8)
+-- ----------------------------------------------------------------------------
+-- Satu baris kas = satu baris ledger (`mutation_id`), sehingga jejak piutang
+-- selalu dapat ditelusuri ke mutasi kas fisiknya. `amount` SELALU positif; arah
+-- kas ditentukan `entry_type`:
+--   disbursement => cash_mutations.mutation_type 'out'
+--   repayment    => cash_mutations.mutation_type 'in' (payment_method cash|nota)
+--
+-- "Potong Nota" sengaja TIDAK memotong `hulu_transactions`: pembelian hulu tetap
+-- dibayar penuh dan angsuran dicatat sebagai kas masuk tersendiri, sehingga
+-- `modal belanja hulu` pada settlement tetap benar (lihat AGENTS.md).
+--
+-- `mutation_id` memakai ON DELETE RESTRICT: satu baris kas tidak boleh dihapus
+-- tanpa menghapus jejak piutangnya. Konsekuensi QC: baris ledger dibersihkan
+-- SEBELUM `cash_mutations` (QcFixture::resetKasbonState()).
+CREATE TABLE IF NOT EXISTS `miner_loan_ledger` (
+    `id`             CHAR(36)      NOT NULL,
+    `loan_id`        CHAR(36)      NOT NULL,
+    `entry_type`     ENUM('disbursement', 'repayment') NOT NULL,
+    `payment_method` ENUM('cash', 'nota') NULL COMMENT 'NULL untuk pencairan',
+    `amount`         DECIMAL(14,2) NOT NULL COMMENT 'Selalu positif; arah ditentukan entry_type',
+    `balance_after`  DECIMAL(14,2) NOT NULL COMMENT 'Sisa utang PINJAMAN INI setelah entri',
+    `register_id`    CHAR(36)      NOT NULL,
+    `mutation_id`    CHAR(36)      NOT NULL COMMENT 'Jejak silang ke cash_mutations',
+    `recorded_by`    CHAR(36)      NULL,
+    `notes`          TEXT          NULL,
+    `created_at`     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_ledger_loan` (`loan_id`, `created_at`),
+    KEY `idx_ledger_created` (`created_at`),
+    KEY `idx_ledger_register` (`register_id`),
+    CONSTRAINT `fk_ledger_loan` FOREIGN KEY (`loan_id`) REFERENCES `miner_loans` (`id`)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `fk_ledger_register` FOREIGN KEY (`register_id`) REFERENCES `cash_registers` (`id`)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `fk_ledger_mutation` FOREIGN KEY (`mutation_id`) REFERENCES `cash_mutations` (`id`)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT `fk_ledger_recorder` FOREIGN KEY (`recorded_by`) REFERENCES `users` (`id`)
+        ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

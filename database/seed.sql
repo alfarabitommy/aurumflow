@@ -67,3 +67,15 @@ INSERT INTO `cash_registers` (`id`, `register_name`, `current_balance`)
 SELECT UUID(), 'Brankas Utama', 0.00
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM `cash_registers` WHERE `register_name` = 'Brankas Utama');
+
+-- ----------------------------------------------------------------------------
+-- daily_loan_limit — batas total pokok kasbon per hari (Fase 8)
+-- ----------------------------------------------------------------------------
+-- Batas bersifat INKLUSIF (Σ pokok hari ini + pokok baru == limit diterima) dan
+-- dihitung per `miner_loans.issued_on`. Nilai 0 berarti kasbon dinonaktifkan;
+-- nilai rusak/negatif ditolak peladen dengan pesan (fail-closed), bukan
+-- dianggap tak terbatas.
+INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`)
+SELECT 'daily_loan_limit', '500000.00', 'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)'
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM `system_settings` WHERE `setting_key` = 'daily_loan_limit');

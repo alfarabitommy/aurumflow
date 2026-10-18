@@ -1942,8 +1942,8 @@ $agentsDocSource = (string) file_get_contents(BASE_PATH . '/AGENTS.md');
 
 Qc::ok(
     'G.17',
-    'Service worker mem-precache `app.js` & `app.min.css` dengan versi shell yang sudah dinaikkan (v2)',
-    str_contains($serviceWorker, "'aurumflow-shell-v2'")
+    'Service worker mem-precache `app.js` & `app.min.css` dengan versi shell yang sudah dinaikkan (v3)',
+    str_contains($serviceWorker, "'aurumflow-shell-v3'")
         && str_contains($serviceWorker, "'./assets/js/app.js'")
         && str_contains($serviceWorker, "'./assets/css/app.min.css'"),
     'CACHE_NAME = ' . (preg_match("/CACHE_NAME = '([^']+)'/", $serviceWorker, $cacheMatch) === 1
@@ -1953,7 +1953,7 @@ Qc::ok(
 
 Qc::ok(
     'G.18',
-    'Versi shell satu pemilik: `AGENTS.md` menyebut `aurumflow-shell-v2`',
+    'Versi shell satu pemilik: `AGENTS.md` menyebut versi yang sama dengan sw.js',
     preg_match("/CACHE_NAME = '([^']+)'/", $serviceWorker, $owner) === 1
         && str_contains($agentsDocSource, '`' . $owner[1] . '`'),
     'versi=' . (string) ($owner[1] ?? '-')
@@ -2076,10 +2076,11 @@ sort($allTables);
 
 Qc::equals(
     'H.7',
-    'Skema kini 10 tabel ERD (sembilan lama + bridge_loans)',
+    'Skema kini 13 tabel ERD (sembilan lama + bridge_loans + tiga tabel kasbon)',
     [
         'bridge_loans', 'capital_wallets', 'cash_mutations', 'cash_registers', 'daily_settlements',
-        'hulu_transactions', 'profit_distributions', 'system_settings', 'users', 'withdrawal_requests',
+        'hulu_transactions', 'miner_loan_ledger', 'miner_loans', 'miners',
+        'profit_distributions', 'system_settings', 'users', 'withdrawal_requests',
     ],
     $allTables
 );

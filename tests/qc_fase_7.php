@@ -1515,6 +1515,13 @@ $cashierFiles = [
     'app/Views/cashier/login.php',
     'app/Services/TellerService.php',
     'app/Services/BridgeLoanService.php',
+    // Fase 8 — permukaan kasir kedua (buku kasbon petani).
+    'app/Controllers/KasbonController.php',
+    'app/Services/KasbonService.php',
+    'app/Views/operator/kasbon.php',
+    'app/Models/Miner.php',
+    'app/Models/MinerLoan.php',
+    'app/Models/MinerLoanLedger.php',
 ];
 
 $loanBookSnapshot = $loanBookSnapshot ?? qc7_loanBook();
@@ -1605,6 +1612,34 @@ Qc::ok(
     'Controller administratif & finansial tidak pernah MENGIZINKAN peran kasir',
     $grantOffenders === [],
     implode("\n", $grantOffenders)
+);
+
+// Sejak Fase 8 ada DUA permukaan izin eksplisit: meja kasir (TellerController)
+// dan buku kasbon (KasbonController). Keduanya satu-satunya pemilik
+// `ALLOWED_ROLES`; controller lain tetap menolak `cashier` tanpa daftar izin.
+$allowListFiles = [];
+
+foreach (glob(APP_PATH . '/Controllers/*.php') ?: [] as $controllerFile) {
+    $controllerSource = (string) file_get_contents($controllerFile);
+
+    if (str_contains($controllerSource, 'ALLOWED_ROLES')) {
+        $allowListFiles[] = basename($controllerFile);
+    }
+}
+
+sort($allowListFiles);
+
+$kasbonControllerSource = (string) file_get_contents(APP_PATH . '/Controllers/KasbonController.php');
+
+Qc::ok(
+    'F.3b',
+    'Hanya dua controller memiliki daftar izin kasir eksplisit: Teller & Kasbon',
+    $allowListFiles === ['KasbonController.php', 'TellerController.php']
+        && str_contains(
+            $kasbonControllerSource,
+            'private const ALLOWED_ROLES = [Constants::ROLE_OPERATOR, Constants::ROLE_CASHIER];'
+        ),
+    implode(', ', $allowListFiles)
 );
 
 $guardFirstFailures = [];
@@ -1758,10 +1793,10 @@ Qc::ok(
     'F.6',
     'Pintu kasir memakai komponen `investorLogin` yang sudah terdaftar (tanpa Alpine.data baru)',
     str_contains($cashierView, 'x-data="investorLogin(')
-        && substr_count($appJs, 'Alpine.data(') === 5
+        && substr_count($appJs, 'Alpine.data(') === 6
         && str_contains($appJs, "Alpine.data('investorLogin', investorLogin)")
         && str_contains($appJs, 'cashierLogin') === false,
-    'komponen Fase 5 dipakai ulang'
+    'komponen Fase 5 dipakai ulang; `kasbonForm` (Fase 8) komponen keenam'
 );
 
 $swSource = (string) file_get_contents(PUBLIC_PATH . '/sw.js');
@@ -1769,10 +1804,10 @@ $agentsSource = (string) file_get_contents(BASE_PATH . '/AGENTS.md');
 
 Qc::ok(
     'F.7',
-    'Aset frontend tidak berubah: CACHE_NAME tetap versi shell Fase 6 dan AGENTS.md sepakat',
-    str_contains($swSource, "var CACHE_NAME = 'aurumflow-shell-v2';")
-        && str_contains($agentsSource, 'aurumflow-shell-v2'),
-    'tanpa kenaikan versi karena app.js/app.min.css tidak berubah'
+    'Aset frontend satu versi: CACHE_NAME (kini v3, Fase 8) dan AGENTS.md sepakat',
+    str_contains($swSource, "var CACHE_NAME = 'aurumflow-shell-v3';")
+        && str_contains($agentsSource, 'aurumflow-shell-v3'),
+    'v2 → v3 karena app.js menerima komponen kasbonForm'
 );
 
 $migrateSource = (string) file_get_contents(BASE_PATH . '/database/migrate.php');

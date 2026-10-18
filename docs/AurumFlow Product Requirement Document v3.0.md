@@ -422,6 +422,41 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
 
 ---
 
+### Modul 7: Kasbon / Piutang Petani (*Miner Loan & Ledger*) — Fase 8
+
+* **Konteks.** Penambang sering meminta panjar untuk kowi, solar, dan ongkos sungai sebelum
+  emasnya ditimbang. Tanpa pencatatan, uang keluar dari `Kas Meja Bakar` tanpa jejak: kas
+  berkurang, emas tidak bertambah, dan selisihnya tidak dapat dipertanggungjawabkan saat tutup
+  buku. Modul ini menjadikan panjar sebagai **piutang** yang dapat ditagih.
+* **Profil petani (koleksi bertahap).** `full_name` **wajib**; `phone_number` dan `location`
+  **opsional** — petani baru tidak ditahan di meja timbang hanya karena belum mau memberi nomor.
+  Nomor telepon unik bila diisi (NULL boleh berulang), sehingga satu nomor tidak menjadi dua
+  identitas piutang.
+* **Sumber dana & dua lapis validasi.** Pencairan mengurangi saldo **Kas Meja Bakar** hari itu dan
+  ditolak peladen bila (a) melampaui `system_settings.daily_loan_limit` — batas **total pokok
+  yang dicairkan hari itu**, bukan per transaksi — atau (b) melampaui **saldo fisik laci**.
+  Keduanya dijawab `422` dengan angka sisa, **tanpa satu pun tulisan**. `daily_loan_limit = 0`
+  berarti kasbon dinonaktifkan.
+* **Pembayaran.** Dua metode, arah kas sama-sama masuk: **tunai** (kasir menerima uang) dan
+  **Potong Nota** (dipotong dari uang tebus emas). Kasir dapat mengetik nominal bebas atau memakai
+  tombol cepat **20 %**, **30 %**, dan **Lunas**. Pelunasan penuh menandai piutang `settled`;
+  angsuran sebagian menyisakan saldo. Bila petani punya beberapa kasbon, pembayaran memotong
+  **yang tertua lebih dulu** (FIFO).
+* **Potong nota bukan diskon.** Pembelian hulu tetap dicatat sebesar nilai penuh dan angsuran
+  dicatat sebagai kas masuk tersendiri, sehingga efek netto pada laci identik dengan uang yang
+  benar-benar diserahkan — sementara `modal belanja hulu`, laba, dan bagi hasil 80 : 20 **tidak**
+  terdistorsi.
+* **User experience kasir.** Autocomplete petani memakai `<datalist>` native dengan format
+  `Nama — Telepon/Lokasi | Sisa Utang: Rp X`; petani baru dapat didaftarkan dari halaman yang sama
+  dan langsung terpilih. Halaman kasbon adalah **satu halaman** (`/operator/kasbon`) yang memuat
+  pencairan, angsuran, pendaftaran petani, daftar peminjam aktif, dan buku besar — tab **Buku
+  Kasbon** (ke-6 bagi operator, ke-2 bagi kasir).
+* **Hak akses.** Operator **dan** kasir boleh mencairkan serta menerima angsuran (dua permukaan
+  izin eksplisit). Mitra pemodal tidak punya akses sama sekali, dan permukaan kasbon tidak pernah
+  menampilkan `Brankas Utama`, laba bersih, `pool mitra`, omzet, maupun tautan ke layar pemilik.
+
+---
+
 ## 7. Desain Skema Basis Data (*Entity Schema*)
 
 ```
@@ -474,6 +509,12 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
 > `docs/AurumFlow Entity Relationship Diagram.md`. Kolom `capital_wallets.tier` tetap bernilai
 > `operator` / `family` / `external`, dengan label antarmuka **Pengelola** / **Mitra Prioritas** /
 > **Mitra Reguler** (§ 4.4) — tidak ada migrasi skema.
+>
+> **Tambahan Fase 8 (buku kasbon).** Tiga tabel baru melengkapi sketsa di atas: `miners`
+> (profil petani), `miner_loans` (satu baris per pencairan + `balance_remaining`), dan
+> `miner_loan_ledger` (riwayat kas kasbon, satu baris kas = satu baris ledger). Ketiganya
+> **tabel baru** — nol `ALTER` pada sepuluh tabel lama — dengan uang `DECIMAL(14,2)` dan
+> PK `CHAR(36)`. Detail DDL ada di dokumen ERD § 4 tabel 11–13.
 
 ---
 

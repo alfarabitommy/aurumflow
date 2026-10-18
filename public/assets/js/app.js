@@ -12,7 +12,9 @@
       untuk layar Kelola Modal (Fase 4).
    8. Komponen Alpine.js `investorLogin` (papan angka PIN) & `investorDashboard`
       untuk portal mitra (Fase 5).
-   9. Registrasi Service Worker PWA (Fase 5) — hanya cache aset statis; HTML,
+   9. Komponen Alpine.js `kasbonForm` untuk Buku Kasbon petani (Fase 8):
+      autocomplete `<datalist>`, tombol cepat 20 %/30 %/Lunas, pratinjau sisa.
+  10. Registrasi Service Worker PWA (Fase 5) — hanya cache aset statis; HTML,
       JSON, dan CSV tidak pernah disimpan di cache.
 
    PENTING: seluruh angka yang DITAMPILKAN halaman tetap berasal dari server
@@ -1694,7 +1696,205 @@
     }
 
     // -----------------------------------------------------------------------
-    // 9. PWA: Service Worker (Fase 5)
+    // 9. Komponen Alpine.js `kasbonForm` — Buku Kasbon petani (Fase 8)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Cermin format nominal untuk isian `amount` (bukan untuk tampilan kartu:
+     * label rupiah di layar tetap berasal dari `Formatter` peladen).
+     *
+     * Sen (integer) -> `'250.000'` / `'12.345,67'` — tepat bentuk yang diterima
+     * `SettlementService::parseMoneyInput()` (titik = ribuan, koma = desimal).
+     * Aritmetika dilakukan pada integer sen, bukan float rupiah.
+     *
+     * @param {number} cents
+     * @return {string}
+     */
+    function kasbonAmountText(cents) {
+        var rounded = Math.round(Math.abs(Number(cents) || 0));
+        var whole = Math.floor(rounded / 100);
+        var fraction = rounded % 100;
+        var text = groupThousands(String(whole));
+
+        if (fraction > 0) {
+            text += ',' + (fraction < 10 ? '0' + fraction : String(fraction));
+        }
+
+        return text;
+    }
+
+    /**
+     * Baca nominal yang diketik kasir dengan aturan yang sama seperti peladen:
+     * titik = pemisah ribuan, koma = desimal, satu koma saja.
+     *
+     * @param {string} text
+     * @return {number} sen (0 bila tidak sah)
+     */
+    function kasbonParseAmount(text) {
+        if (typeof text !== 'string') {
+            return 0;
+        }
+
+        var value = text.trim();
+
+        if (value === '' || value.indexOf('-') !== -1) {
+            return 0;
+        }
+
+        var digits = value.replace(/[^0-9.,]/g, '');
+
+        if (digits === '' || digits.indexOf(',') !== digits.lastIndexOf(',')) {
+            return 0;
+        }
+
+        var parts = digits.split(',');
+        var integer = parts[0] || '';
+        var fraction = parts.length > 1 ? parts[1] : '';
+
+        if (fraction.length > 2) {
+            return 0;
+        }
+
+        if (integer.indexOf('.') !== -1 && !/^\d{1,3}(\.\d{3})+$/.test(integer)) {
+            return 0;
+        }
+
+        var plain = integer.replace(/\./g, '');
+
+        if (!/^\d+$/.test(plain)) {
+            return 0;
+        }
+
+        var whole = Number(plain);
+
+        if (!isFinite(whole) || whole > 999999999999) {
+            return 0;
+        }
+
+        var cents = Number(plain) * 100;
+
+        while (fraction.length < 2) {
+            fraction += '0';
+        }
+
+        return cents + Number(fraction || 0);
+    }
+
+    /**
+     * @param {{mode?: string}} config `mode`: 'disburse' (kasbon baru) atau
+     *        'repay' (angsuran). Hanya penanda perilaku; SELURUH angka utang
+     *        berasal dari atribut DOM `data-outstanding` yang dirender peladen.
+     */
+    function kasbonForm(config) {
+        var options = config || {};
+
+        return {
+            mode: options.mode === 'disburse' ? 'disburse' : 'repay',
+
+            minerLabel: '',
+            minerId: '',
+            outstandingCents: 0,
+            amount: '',
+            submitting: false,
+
+            /** value label -> {id, cents}; dibangun dari <datalist> di DOM. */
+            index: {},
+
+            /**
+             * Ambil nilai awal dari DOM (bukan `$refs`) supaya isian yang
+             * dikembalikan peladen pada jalur 422 tidak terhapus `x-model`.
+             */
+            init: function () {
+                // Nama field berbeda per kartu: pencairan memakai `miner_label` /
+                // `miner_id` / `principal_amount`, angsuran memakai `pay_miner_*`
+                // dan `amount` (satu halaman boleh memuat dua form).
+                var prefix = this.mode === 'disburse' ? '' : 'pay_';
+                var amountField = this.mode === 'disburse' ? 'principal_amount' : 'amount';
+
+                this.minerLabel = formFieldValue(this, prefix + 'miner_label');
+                this.minerId = formFieldValue(this, prefix + 'miner_id');
+                this.amount = formFieldValue(this, amountField);
+
+                var scope = this.$root || null;
+                var options = scope && typeof scope.querySelectorAll === 'function'
+                    ? scope.querySelectorAll('datalist option')
+                    : [];
+
+                for (var i = 0; i < options.length; i++) {
+                    var option = options[i];
+                    var label = String(option.value || '');
+                    var id = String(option.getAttribute('data-miner-id') || '');
+                    var cents = Number(option.getAttribute('data-outstanding') || '0');
+
+                    if (label === '' || id === '') {
+                        continue;
+                    }
+
+                    this.index[label] = {
+                        id: id,
+                        cents: isFinite(cents) ? cents : 0
+                    };
+                }
+
+                if (this.minerLabel !== '') {
+                    this.pickMiner();
+                }
+            },
+
+            /** Petani terpilih -> id + sisa utang (dipakai tombol cepat). */
+            pickMiner: function () {
+                var entry = this.index[this.minerLabel] || null;
+
+                this.minerId = entry ? entry.id : '';
+                this.outstandingCents = entry ? entry.cents : 0;
+            },
+
+            /** Isi nominal = persentase sisa utang (sen integer, half-up). */
+            pickPercent: function (percent) {
+                var pct = Number(percent) || 0;
+
+                if (this.outstandingCents <= 0 || pct <= 0) {
+                    return;
+                }
+
+                this.amount = kasbonAmountText(Math.round(this.outstandingCents * pct / 100));
+            },
+
+            /** "Lunas": nominal = tepat sisa utang. */
+            payFull: function () {
+                if (this.outstandingCents <= 0) {
+                    return;
+                }
+
+                this.amount = kasbonAmountText(this.outstandingCents);
+            },
+
+            get amountCents() {
+                return kasbonParseAmount(this.amount);
+            },
+
+            get hasMiner() {
+                return this.minerId !== '';
+            },
+
+            get outstandingLabel() {
+                return this.hasMiner ? kasbonAmountText(this.outstandingCents) : '';
+            },
+
+            get afterLabel() {
+                if (!this.hasMiner || this.amountCents <= 0) {
+                    return '—';
+                }
+
+                var after = this.outstandingCents - this.amountCents;
+
+                return kasbonAmountText(after > 0 ? after : 0);
+            }
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. PWA: Service Worker (Fase 5)
     // -----------------------------------------------------------------------
 
     /**
@@ -1741,6 +1941,7 @@
             window.Alpine.data('capitalSimulator', capitalSimulator);
             window.Alpine.data('investorLogin', investorLogin);
             window.Alpine.data('investorDashboard', investorDashboard);
+            window.Alpine.data('kasbonForm', kasbonForm);
         }
     });
 })();

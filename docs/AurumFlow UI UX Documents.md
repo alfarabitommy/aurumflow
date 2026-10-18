@@ -637,11 +637,12 @@ Baris atas: logo **AURUMFLOW** + subjudul halaman (adaptif — `$title` halaman 
 tetap "Meja Hulu" untuk kasir), nama + label peran pengguna, dan tombol **Keluar**. Tombol
 **Dashboard** yang dulu menempel di header **dihapus** karena kini menjadi tab pertama.
 
-Baris bawah: lima tab untuk operator (`Dashboard`, `Kasir`, `Rekonsiliasi`, `Kelola Modal`,
-`Kelola Kasir`) dan **satu** tab untuk kasir (`Kasir`). Penanda tab aktif diturunkan dari
-`REQUEST_URI` — bukan dari controller — sehingga sub-halaman seperti `/operator/capital/topup`
-tetap menandai menu induknya. Pada ponsel baris ini menggeser **horizontal**
-(`overflow-x-auto` + `shrink-0` per tab), jadi label tidak pernah terlipat.
+Baris bawah: **enam** tab untuk operator (`Dashboard`, `Kasir`, `Rekonsiliasi`, `Kelola Modal`,
+`Kelola Kasir`, `Buku Kasbon`) dan **dua** tab untuk kasir (`Kasir`, `Buku Kasbon`). Penanda tab
+aktif diturunkan dari `REQUEST_URI` — bukan dari controller — sehingga sub-halaman seperti
+`/operator/capital/topup` maupun `/operator/kasbon/angsuran` tetap menandai menu induknya. Pada
+ponsel baris ini menggeser **horizontal** (`overflow-x-auto` + `shrink-0` per tab), jadi label
+tidak pernah terlipat.
 
 | Elemen | Operator | Kasir |
 | :--- | :---: | :---: |
@@ -650,6 +651,7 @@ tetap menandai menu induknya. Pada ponsel baris ini menggeser **horizontal**
 | Tab **Rekonsiliasi** (`/operator/settlement`) | ✅ | ⛔ disembunyikan |
 | Tab **Kelola Modal** (`/operator/capital`) | ✅ | ⛔ disembunyikan |
 | Tab **Kelola Kasir** (`/operator/kasir`) | ✅ | ⛔ disembunyikan |
+| Tab **Buku Kasbon** (`/operator/kasbon`) | ✅ (tab ke-6) | ✅ (tab ke-2) |
 | Subjudul baris atas | `$title` halaman (mis. "Rekonsiliasi & Settlement") | "Meja Hulu" |
 | Label identitas di header | nama + "Pengelola (Operator)" | nama + "Kasir Meja Bakar" |
 | Widget sticky header | Saldo Kas Meja Bakar + Emas holding | idem (tanpa Brankas) |
@@ -678,3 +680,67 @@ kanari angka, bukan hanya pemindaian markup.
 | Kebijakan PIN | Dipakai ulang dari `OnboardingService::pinPolicy()` — PIN lemah ditolak dengan pesan yang sama seperti pembuatan PIN mitra |
 | Kerahasiaan | PIN tidak pernah dirender kembali (tidak ada kolom terisi); flash hanya menyebut nama/nomor |
 | Aturan form | Sama dengan Layar B/C: nilai awal dari peladen, placeholder contoh berawalan `mis. `, kontrol form **tidak pernah** `:disabled` |
+
+---
+
+## 8. Buku Kasbon Petani — Layar F (Fase 8)
+
+Satu halaman untuk seluruh pekerjaan piutang petani: **`/operator/kasbon`** (tab **Buku Kasbon**,
+ke-6 bagi operator dan ke-2 bagi kasir). Alasannya ergonomi: kasir berdiri di samping timbangan
+dengan satu tangan bebas, jadi pencairan, angsuran, dan pendaftaran petani tidak boleh tersebar di
+beberapa layar; semuanya berada dalam satu gulir vertikal dengan kartu bertumpuk.
+
+### 8.1 Anatomi layar (mobile-first, satu kolom)
+
+| # | Kartu | Isi | Sumber angka |
+| :--- | :--- | :--- | :--- |
+| 1 | **Batas Kasbon Hari Ini** | `Terpakai Rp X dari Rp Y (Z %)`, `Sisa Rp R`, `Utang berjalan Rp T`, bilah tipis `h-2` dengan lebar dari integer persen peladen | `KasbonService::usageToday()` |
+| 2 | **Kasbon Baru** | Autocomplete petani (`<datalist>`), nominal, catatan opsional, tombol kirim selebar kartu | `dailyLimit()` / `usageToday()` |
+| 3 | **Bayar Kasbon** | Autocomplete petani, radio **Tunai** / **Potong Nota**, nominal, tombol cepat **20 % / 30 % / Lunas**, pratinjau "Sisa setelah bayar" | `KasbonService::minerOptions()` |
+| 4 | **Daftarkan Petani Baru** | Nama (wajib), telepon (opsional), lokasi (opsional) | — |
+| 5 | **Petani dengan Utang Berjalan** | Tabel: Nama · Kontak/Lokasi · Sisa Utang · Kasbon terakhir · tombol **Pilih** (`?miner=<uuid>`) | `MinerLoan::activeBorrowers()` |
+| 6 | **Riwayat Buku Kasbon** | Tabel 20 entri terakhir: Tanggal · Petani · Jenis · Nominal · Sisa setelah · Dicatat oleh | `MinerLoanLedger::recent()` |
+| 7 | **Petunjuk** | "Potong nota = pembelian hulu dibayar penuh, angsuran dicatat terpisah." | teks statis |
+
+### 8.2 Autocomplete petani (`<datalist>` native)
+
+```
+Budi — 0812-3456-7890 | Sisa Utang: Rp 250.000     (telepon ada)
+Sari — Sungai Kandi | Sisa Utang: Rp 0             (hanya lokasi)
+Joko | Sisa Utang: Rp 120.000                      (tanpa kontak)
+```
+
+* Segmen kontak **dihilangkan** bila telepon & lokasi kosong; bila keduanya ada → `telepon · lokasi`
+  (lokasi dipotong 40 karakter).
+* Daftar dibatasi **200** baris, urutan **berutang lebih dulu** lalu nama A→Z.
+* Setiap `<option>` membawa `data-miner-id` dan `data-outstanding` (sen integer). Komponen Alpine
+  `kasbonForm` membaca atribut itu **dari DOM** — tidak ada data petani yang disuntikkan sebagai JSON
+  ke JavaScript, dan peladen tetap memvalidasi pilihan lewat `resolveMiner()`.
+* Tanpa JavaScript form tetap berfungsi: datalist hanya saran, nominal diketik manual, peladen
+  memvalidasi.
+
+### 8.3 Tombol cepat
+
+| Tombol | Perilaku | Contoh (sisa utang Rp 250.000) |
+| :--- | :--- | :--- |
+| `20 %` | isi nominal = 20 % sisa utang | `Rp 50.000` |
+| `30 %` | isi nominal = 30 % sisa utang | `Rp 75.000` |
+| `Lunas` | isi nominal = **tepat** sisa utang | `Rp 250.000` |
+
+Tombol hanya mengisi isian; peladen tetap memvalidasi `0 < nominal ≤ sisa utang`. Aritmetika
+dihitung dalam **sen integer** (half away from zero) dan ditulis sebagai teks berpemisah ribuan
+titik + koma desimal — bentuk yang diterima `SettlementService::parseMoneyInput()`.
+
+### 8.4 Aturan tampilan (tidak berubah dari Fase 2–7)
+
+* **Nol kompilasi CSS.** Seluruh kelas pada layar ini sudah ada di `public/assets/css/app.min.css`
+  (komponen `af-*` + utilitas yang dipakai view lain). Tidak ada nilai arbitrary (`text-[0.6rem]`,
+  `w-[42%]`) dan tidak ada kelas baru.
+* Nilai awal form dirender **peladen** (`value="…"`), dibaca `kasbonForm::init()` lewat DOM
+  (bukan `$refs`); isian bernilai awal memakai `x-model.fill`.
+* Kontrol form **tidak pernah** `:disabled` — selama pengiriman dipakai `:readonly="submitting"` +
+  `opacity-70 cursor-not-allowed`; `:disabled` hanya untuk `<button>`.
+* Semua output dinamis lewat `Security::e()`; seluruh angka lewat `Formatter::rupiah()` /
+  `tanggalId()`.
+* Permukaan kasbon **tidak** memuat `Brankas`, laba bersih, `pool mitra`, omzet, maupun tautan ke
+  Rekonsiliasi/Kelola Modal/Kelola Kasir/Dashboard.

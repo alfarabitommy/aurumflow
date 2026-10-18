@@ -43,19 +43,29 @@
 
        ┌────────────────────────┐       1..N ┌────────────────────────┐
        │     CASH_REGISTERS     ├───────────►│     CASH_MUTATIONS     │
-       └───────────┬────────────┘            └────────────────────────┘
-                   │ 1
-                   │
-                   │ 1..N
-       ┌───────────▼────────────┐
-       │      BRIDGE_LOANS      │  (dana talangan operasional — Fase 6)
-       └───────────▲────────────┘
-                   │ 1..N
-                   │
-                   │ 0..1
-       ┌───────────┴────────────┐
-       │   DAILY_SETTLEMENTS    │
-       └────────────────────────┘
+       └───────────┬────────────┘            └───────────▲────────────┘
+                   │ 1                                   │ 1..1
+                   │                                     │ (jejak silang)
+                   │ 1..N                                │
+       ┌───────────▼────────────┐            ┌───────────┴────────────┐
+       │      BRIDGE_LOANS      │            │  MINER_LOAN_LEDGER     │
+       │ (talangan operasional, │            │ (riwayat kas kasbon,   │
+       │  Fase 6)               │            │  Fase 8)               │
+       └───────────▲────────────┘            └───────────▲────────────┘
+                   │ 1..N                                │ 1..N
+                   │                                     │
+                   │ 0..1                    1..N ┌─────┴──────────────────┐
+       ┌───────────┴────────────┐        ┌──────────►│      MINER_LOANS       │
+       │   DAILY_SETTLEMENTS    │        │           │ (satu baris per        │
+       └────────────────────────┘        │           │  pencairan + saldo)    │
+                                         │           └───────────▲────────────┘
+                                         │                       │ 1
+                                         │                       │
+                                         │                       │ 1..N
+                                         │           ┌───────────┴────────────┐
+                                         └───────────┤        MINERS          │
+                                                     │ (petani/penambang)     │
+                                                     └────────────────────────┘
 ```
 
 ---
@@ -72,6 +82,10 @@
 | `cash_registers` → `cash_mutations` | 1 : N | Pos kas fisik (meja bakar atau brankas utama) mencatat seluruh riwayat mutasi masuk/keluar. |
 | `cash_registers` → `bridge_loans` | 1 : N | Pos kas penerima dana talangan. Pengembalian selalu keluar dari pos yang sama (`Kas Meja Bakar`), karena dana talangan hanya **melintas** di kas operasional. |
 | `daily_settlements` → `bridge_loans` | 1 : N | Satu sesi tutup buku mengembalikan pokok + fee seluruh dana talangan yang masih `active` (urutan FIFO). Baris talangan menyimpan `settlement_id` sebagai jejak audit pengembaliannya. |
+| `miners` → `miner_loans` | 1 : N | Satu petani dapat menerima beberapa kasbon (pencairan) sepanjang waktu; pencairan baru **tidak** menutup yang lama, sehingga utang berjalan dibaca sebagai `SUM(balance_remaining)` baris `status='open'`. |
+| `miner_loans` → `miner_loan_ledger` | 1 : N | Setiap pergerakan kas kasbon (pencairan atau angsuran) menghasilkan **satu** baris ledger dengan `balance_after` pinjaman tersebut. |
+| `cash_mutations` → `miner_loan_ledger` | 1 : 1 | Satu baris kas = satu baris ledger (`mutation_id`), sehingga jejak piutang selalu dapat ditelusuri ke mutasi kas fisiknya. |
+| `cash_registers` → `miner_loan_ledger` | 1 : N | Seluruh kas kasbon mengalir melalui pos `Kas Meja Bakar`: pencairan sebagai mutasi `out`, angsuran (tunai maupun potong nota) sebagai mutasi `in`. |
 
 ---
 
@@ -104,6 +118,14 @@ DROP TABLE IF EXISTS cash_registers;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS system_settings;
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- =====================================================================
+-- SKEMA TOTAL: 13 TABEL
+--   1-9  fondasi Fase 1 (system_settings … withdrawal_requests)
+--   10   bridge_loans           (dana talangan, Fase 6)
+--   11-13 miners, miner_loans, miner_loan_ledger (buku kasbon petani, Fase 8)
+-- Tidak ada tabel lain di luar daftar ini; Fase 7 hanya menambah nilai ENUM.
+-- =====================================================================
 
 -- ---------------------------------------------------------------------
 -- 1. TABEL PENGATURAN SISTEM (SYSTEM_SETTINGS)
@@ -303,7 +325,88 @@ CREATE TABLE bridge_loans (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
--- 11. DATA INISIALISASI DASAR (SEED DATA)
+-- 11. MINERS (master petani/penambang — Fase 8)
+-- =====================================================================
+-- Data dikumpulkan BERTAHAP: saat pertama kali meminjam, hanya `full_name`
+-- yang wajib. `phone_number` dan `location` menyusul pada kedatangan
+-- berikutnya, supaya kasir tidak menahan antrean dan petani baru tidak
+-- merasa diinterogasi.
+-- `phone_number` NULL-able namun UNIQUE: banyak baris NULL diperbolehkan
+-- (petani tanpa nomor), sementara satu nomor tidak boleh menjadi dua
+-- identitas piutang.
+CREATE TABLE IF NOT EXISTS miners (
+    id CHAR(36) NOT NULL,
+    full_name VARCHAR(100) NOT NULL COMMENT 'Wajib — identitas minimum saat mendaftar',
+    phone_number VARCHAR(20) NULL COMMENT 'Opsional; UNIQUE, NULL boleh berulang',
+    location VARCHAR(100) NULL COMMENT 'Opsional — kampung/sungai/patok',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_miner_phone (phone_number),
+    INDEX idx_miner_name (full_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 12. MINER_LOANS (satu baris per pencairan kasbon + saldo berjalan)
+-- =====================================================================
+-- `issued_on` adalah TANGGAL BISNIS pencairan (bukan `created_at`), karena
+-- batas harian `system_settings.daily_loan_limit` dihitung per tanggal itu.
+-- `balance_remaining` disimpan (bukan dihitung SUM saat baca) agar laporan
+-- tidak perlu menjumlah ulang; invariant yang dijaga peladen:
+--   principal_amount - SUM(angsuran ledger) = balance_remaining
+CREATE TABLE IF NOT EXISTS miner_loans (
+    id CHAR(36) NOT NULL,
+    miner_id CHAR(36) NOT NULL,
+    principal_amount DECIMAL(14,2) NOT NULL COMMENT 'Pokok saat dicairkan',
+    balance_remaining DECIMAL(14,2) NOT NULL COMMENT 'Sisa utang berjalan',
+    status ENUM('open', 'settled') NOT NULL DEFAULT 'open',
+    issued_on DATE NOT NULL COMMENT 'Tanggal pencairan — dasar batas harian',
+    issued_by CHAR(36) NULL COMMENT 'users.id pencatat (NULL bila akun dihapus)',
+    settled_at DATETIME NULL,
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_loan_miner FOREIGN KEY (miner_id) REFERENCES miners (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_loan_issuer FOREIGN KEY (issued_by) REFERENCES users (id) ON DELETE SET NULL ON UPDATE CASCADE,
+    INDEX idx_loan_miner_status (miner_id, status),
+    INDEX idx_loan_issued_on (issued_on),
+    INDEX idx_loan_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 13. MINER_LOAN_LEDGER (riwayat kas kasbon — satu baris kas = satu baris)
+-- =====================================================================
+-- `amount` selalu positif; arah kas ditentukan `entry_type`:
+--   disbursement => cash_mutations.type 'out'
+--   repayment    => cash_mutations.type 'in'  (payment_method cash | nota)
+-- "Potong Nota" sengaja TIDAK memotong `hulu_transactions`: pembelian hulu
+-- tetap dibayar penuh dan angsuran dicatat sebagai kas masuk tersendiri,
+-- sehingga modal belanja hulu pada settlement tetap benar.
+CREATE TABLE IF NOT EXISTS miner_loan_ledger (
+    id CHAR(36) NOT NULL,
+    loan_id CHAR(36) NOT NULL,
+    entry_type ENUM('disbursement', 'repayment') NOT NULL,
+    payment_method ENUM('cash', 'nota') NULL COMMENT 'NULL untuk pencairan',
+    amount DECIMAL(14,2) NOT NULL COMMENT 'Selalu positif; arah ditentukan entry_type',
+    balance_after DECIMAL(14,2) NOT NULL COMMENT 'Sisa utang pinjaman ini setelah entri',
+    register_id CHAR(36) NOT NULL,
+    mutation_id CHAR(36) NOT NULL COMMENT 'Satu baris kas = satu baris ledger',
+    recorded_by CHAR(36) NULL,
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_ledger_loan FOREIGN KEY (loan_id) REFERENCES miner_loans (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_ledger_register FOREIGN KEY (register_id) REFERENCES cash_registers (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_ledger_mutation FOREIGN KEY (mutation_id) REFERENCES cash_mutations (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_ledger_recorder FOREIGN KEY (recorded_by) REFERENCES users (id) ON DELETE SET NULL ON UPDATE CASCADE,
+    INDEX idx_ledger_loan (loan_id, created_at),
+    INDEX idx_ledger_created (created_at),
+    INDEX idx_ledger_register (register_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 14. DATA INISIALISASI DASAR (SEED DATA)
 -- =====================================================================
 
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES
@@ -312,7 +415,8 @@ INSERT INTO system_settings (setting_key, setting_value, description) VALUES
 ('default_burn_fee', '20000.00', 'Biaya flat jasa pembakaran amalgama per kedatangan'),
 ('default_burn_fee_operator_cut', '10000.00', 'Porsi upah kas langsung pengelola dari jasa bakar'),
 ('notice_period_days', '7', 'Masa tunggu penarikan modal pokok investor (hari)'),
-('active_carryover_deficit', '0.00', 'Akumulasi defisit hari minus yang belum pulih');
+('active_carryover_deficit', '0.00', 'Akumulasi defisit hari minus yang belum pulih'),
+('daily_loan_limit', '500000.00', 'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)');
 
 INSERT INTO cash_registers (id, register_name, current_balance) VALUES
 (UUID(), 'Kas Meja Bakar', 0.00),
@@ -339,3 +443,14 @@ INSERT INTO cash_registers (id, register_name, current_balance) VALUES
    **tidak ada tabel maupun kolom baru** dan tidak ada `ALTER` yang bersifat destruktif.
    Tidak ada kolom kredensial tambahan: PIN kasir disimpan ber-pepper pada kolom
    `users.password_hash` yang sudah ada (`role` adalah pembeda pintu masuk).
+6. **Buku Kasbon Petani (Fase 8):** tabel **11–13** ditambahkan sebagai **tabel baru**
+   (`miners`, `miner_loans`, `miner_loan_ledger`) — **nol `ALTER`** pada tabel lama, sehingga
+   instalasi lapangan cukup menjalankan `php database/migrate.php` (migrasi **M2**, terjaga
+   `INFORMATION_SCHEMA`, idempoten) atau `database/install.php` untuk instalasi baru. Tiga
+   indeks melayani tiga jalur baca terpanas: `idx_loan_issued_on` (Σ pokok hari ini untuk
+   batas harian), `idx_loan_miner_status` (utang berjalan per petani + kunci FIFO
+   `WHERE miner_id = ? AND status = 'open' ORDER BY issued_on ASC, created_at ASC, id ASC`),
+   dan `idx_ledger_created` (riwayat 20 entri terakhir). `miner_loan_ledger.mutation_id`
+   memakai `ON DELETE RESTRICT` sehingga satu baris kas tidak dapat dihapus tanpa menghapus
+   jejak piutangnya; `issued_by`/`recorded_by` memakai `ON DELETE SET NULL` karena akun staf
+   boleh dihapus sementara riwayat kasbon wajib tetap terbaca.

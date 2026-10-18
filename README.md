@@ -154,10 +154,10 @@ aurumflow/
 │   │   └── errors/           # 404.php, 500.php, error.php
 │   └── routes.php            # route table (data saja)
 ├── database/
-│   ├── schema.sql            # DDL ERD (10 tabel)
+│   ├── schema.sql            # DDL ERD (13 tabel)
 │   ├── seed.sql              # system_settings + cash_registers
 │   ├── install.php           # runner instalasi (WAJIB dihapus setelah dipakai)
-│   └── migrate.php           # migrasi aditif lapangan (Fase 7; idempoten)
+│   └── migrate.php           # migrasi aditif lapangan (Fase 7–8; idempoten)
 ├── public/                   # ← DOCUMENT ROOT
 │   ├── index.php             # front controller
 │   ├── .htaccess
@@ -263,7 +263,7 @@ Atau lewat browser (hosting tanpa CLI):
 https://domain-anda.com/database/install.php?token=<INSTALL_TOKEN>
 ```
 
-Instalasi akan: menerapkan `schema.sql` (10 tabel ERD), `seed.sql`
+Instalasi akan: menerapkan `schema.sql` (13 tabel ERD), `seed.sql`
 (6 `system_settings` + 2 `cash_registers`), membuat akun operator, dan menulis
 marker `storage/installed.lock` — penyiapan akun + verifikasi pos kas
 dibungkus dalam **satu transaksi** PDO.
@@ -282,7 +282,12 @@ php database/migrate.php
 Skrip menolak berjalan bila `INSTALL_TOKEN` kosong (gate sama dengan
 `database/install.php`), melaporkan `diterapkan` atau `sudah diterapkan`, dan
 **tidak** menyentuh `storage/installed.lock`, sehingga instalasi yang sudah ada
-tidak pernah ditimpa.
+tidak pernah ditimpa. Sejak Fase 8 skrip ini menjalankan dua migrasi sekaligus:
+
+| Migrasi | Isi | Dimiliki |
+| :--- | :--- | :--- |
+| **M1** | nilai ENUM `'cashier'` di ujung `users.role` | `User::ensureRoleEnum()` |
+| **M2** | tiga tabel kasbon (`miners`, `miner_loans`, `miner_loan_ledger`) + kunci `system_settings.daily_loan_limit` | `Miner::ensureSchema()` + `SystemSetting::ensure()` |
 
 ### 4.5 TINDAK LANJUT WAJIB setelah instalasi
 
@@ -292,6 +297,8 @@ tidak pernah ditimpa.
 4. Ganti password operator setelah login pertama.
 5. Bila basis data dipasang **sebelum** Fase 7, jalankan `php database/migrate.php`
    (aditif, idempoten) lalu buat akun kasir dari **Kelola Kasir** (`/operator/kasir`).
+6. Bila basis data dipasang **sebelum** Fase 8, jalankan `php database/migrate.php`
+   sekali lagi (migrasi **M2**) agar tabel buku kasbon dan batas harian tersedia.
 
 ---
 
@@ -328,6 +335,7 @@ php tests/qc_fase_3.php
 php tests/qc_fase_4.php
 php tests/qc_fase_5.php
 php tests/qc_fase_6.php
+php tests/qc_fase_8.php
 php tests/qc_sql_injection.php
 php tests/qc_routing.php
 ```
@@ -337,17 +345,18 @@ php tests/qc_routing.php
 | `qc_pdo` | 20 | Koneksi, charset, timezone, exception, singleton, presisi DECIMAL, transaksi commit/rollback |
 | `qc_formatter` | 43 | Format Rupiah & gramatur (kesamaan string persis), round-trip, locale, tanggal operasi |
 | `qc_security` | 32 | XSS escaping, password hashing, CSRF, session, `uuidV4()`, sumber acak |
-| `qc_seed` | 47 | Idempotensi DDL/seed, 10 tabel ERD, konvensi DECIMAL, FK, ENUM, guard installer |
+| `qc_seed` | 48 | Idempotensi DDL/seed, 13 tabel ERD, konvensi DECIMAL, FK, ENUM, semantik kunci kasbon, guard installer |
 | `qc_roadmap_protocol_1` | 6 | **Protokol QC Manual 1** dari dokumen Roadmap (5 baris, 1:1) |
 | `qc_fase_2` | 66 | **Protokol QC Manual 2** + kalkulasi uang, parsing input, atomisitas, saldo kurang, anti double-submit, guard peran, pemindaian statis, kontrak form kasir (`type`/`inputmode`/`x-model.fill`, `init()` tanpa `$refs`, kontrol tidak `:disabled`) |
 | `qc_fase_3` | 98 | **Protokol QC Manual 3** (3.1 normal, 3.2 hari minus, 3.3 pemulihan defisit) + Smart Auto-Split, mesin defisit, unggah nota (gambar tiruan), atomisitas & berkas yatim, pemindaian statis, kontrak form rekonsiliasi (pre-fill, placeholder contoh, paritas kunci lintas lapis, `init()` tanpa `$refs`, kontrol tidak `:disabled`) |
-| `qc_fase_4` | 112 | **Protokol QC Manual 4** (waterfall 50 %/kuota prioritas/pro-rata, distribusi pool 20 % presisi sen, hari minus) + atomisitas setoran & Pindah Kas, antrean penarikan H-7 hari kerja, guard peran & `_once`, pemindaian statis, kontrak form kelola modal |
+| `qc_fase_4` | 115 | **Protokol QC Manual 4** (waterfall 50 %/kuota prioritas/pro-rata, distribusi pool 20 % presisi sen, hari minus) + atomisitas setoran & Pindah Kas, antrean penarikan H-7 hari kerja, guard peran & `_once`, pemindaian statis, kontrak form kelola modal |
 | `qc_fase_5` | 130 | **Protokol QC Manual 5** (undangan sekali pakai + audit jejak hukum, kebijakan PIN & pepper gagal-tertutup, pembatas percobaan, isolasi blind dengan kanari, penarikan mandiri H-7, ekspor cetak/CSV, PWA, kontrak form & gating sadar peran, bootstrap Alpine pada setiap layout ber-Alpine) |
 | `qc_fase_6` | 105 | **Protokol QC Manual 6A** (dana talangan: fee nominal/persen dihitung peladen, penerimaan kas tiga tulisan + atomisitas & `_once`, auto-pay tutup buku dengan satu mutasi `out` per talangan, **isolasi pool mitra dibuktikan diferensial** (dengan vs tanpa talangan), hari minus & `fee_uncovered`, FIFO lintas siklus, penjagaan saldo, tabel ke-10 tanpa ALTER, **regresi UI**: baris fee talangan tidak pernah bergantung pada laba) |
-| `qc_fase_7` | 77 | **Protokol QC Manual 7** (peran kasir: ENUM aditif + migrasi idempoten, provisioning "Kelola Kasir" dengan PIN ber-pepper, pintu PIN `/cashier/login`, **matriks gating *allow-list*** GET+POST dengan nol tulisan & `_once` utuh, isolasi permukaan kasir lewat kanari & daftar terlarang, kontrak statis guard-first) |
+| `qc_fase_7` | 78 | **Protokol QC Manual 7** (peran kasir: ENUM aditif + migrasi idempoten, provisioning "Kelola Kasir" dengan PIN ber-pepper, pintu PIN `/cashier/login`, **matriks gating *allow-list*** GET+POST dengan nol tulisan & `_once` utuh, isolasi permukaan kasir lewat kanari & daftar terlarang, kontrak statis guard-first) |
+| `qc_fase_8` | 66 | **Protokol QC Manual 8** (buku kasbon petani: tiga tulisan atomik pencairan, **dua lapis validasi** batas harian + saldo fisik laci dengan nol tulisan, angsuran tunai/potong nota & FIFO satu mutasi kas, pelunasan, `_once`, RBAC **dua permukaan izin**, isolasi permukaan kasir, kontrak statis urutan kunci, datalist & tombol cepat, `CACHE_NAME` v3, **nol kompilasi CSS**) |
 | `qc_sql_injection` | 15 | 8 payload injeksi (model + HTTP), integritas data, pemindaian statis |
 | `qc_routing` | 31 | Routing, CSRF, login/logout, cookie, header, proteksi file sensitif, aset |
-| **Total** | **782** | **0 FAIL** |
+| **Total** | **853** | **0 FAIL** |
 
 Exit code `0` = seluruh assertion lulus, `1` = ada yang gagal.
 
@@ -361,6 +370,7 @@ node tests/manual/js_form_init_check.js         # 47 assertion; tidak bagian dar
 node tests/manual/js_capital_simulator_check.js # cermin waterfall JS vs peladen (Fase 4)
 node tests/manual/js_investor_check.js          # 45 assertion: papan angka PIN, dasbor mitra, bootstrap Alpine layout, salin tautan, scope SW (Fase 5)
 node tests/manual/js_bridge_fee_check.js        # 65 assertion: cermin fee talangan & klamp hak pengelola (Fase 6)
+node tests/manual/js_kasbon_check.js            # 24 assertion: cermin tombol cepat 20 %/30 %/Lunas & init() buku kasbon (Fase 8)
 ```
 
 `qc_roadmap_protocol_1`, `qc_fase_2`, dan `qc_fase_3` mencetak tabel yang
@@ -678,8 +688,9 @@ berdaftar-putih; navigasi selalu jaringan, HTML/CSV tidak pernah di-cache), `off
 > dilayani **cache-first**, sehingga tanpa kenaikan versi shell peramban operator tetap menjalankan
 > JS/CSS lama bersama view baru — komponen Alpine kehilangan variabel baru (mis. `bridgeHasActive`)
 > dan elemen `x-cloak x-show="…"` tidak pernah muncul. Versi shell saat ini
-> **`aurumflow-shell-v2`** (dinaikkan dari v1 pada Fase 6); sinkronisasi versi antara `sw.js` dan
-> `AGENTS.md` dijaga assertion `G.17`–`G.18` (`qc_fase_6`).
+> **`aurumflow-shell-v3`** (v1 → v2 pada Fase 6, v2 → v3 pada Fase 8 saat `app.js` menerima komponen
+> `kasbonForm`); sinkronisasi versi antara `sw.js` dan `AGENTS.md` dijaga assertion `G.17`–`G.18`
+> (`qc_fase_6`).
 
 **Gating sadar peran.** `BaseController::roleLandingPath()` adalah satu-satunya pemetaan peran →
 beranda: `investor` → `/investor/dashboard`, selain itu → `/dashboard`. `/dashboard` **operator-only**
@@ -741,12 +752,14 @@ tiap peran punya **satu** pintu kredensial:
 | `investor` (Mitra Pemodal) | `/investor/login` | PIN 6 digit (+ pepper) | `/investor/dashboard` |
 | `cashier` (Kasir Meja Bakar) | `/cashier/login` | PIN 6 digit (+ pepper) | `/operator/teller` |
 
-**Isolasi bersifat *allow-list*.** Hanya tiga endpoint menerima peran `cashier`:
-`GET /operator/teller`, `POST /operator/teller`, dan `POST /operator/teller/talangan`
-(`TellerController::ALLOWED_ROLES`). Rekonsiliasi, kelola modal (+ 6 sub-POST), kelola kasir,
-dasbor ringkasan, dan seluruh portal mitra **tidak pernah** menyebut `Constants::ROLE_CASHIER`,
-sehingga sesi kasir yang mencobanya dijawab `302` ke `/operator/teller` **tanpa satu pun tulisan** —
-untuk GET maupun POST.
+**Isolasi bersifat *allow-list*.** Permukaan yang menerima peran `cashier` berjumlah **dua**
+(sejak Fase 8): `TellerController` (`GET /operator/teller`, `POST /operator/teller`,
+`POST /operator/teller/talangan`) dan `KasbonController` (`GET /operator/kasbon`,
+`POST /operator/kasbon`, `POST /operator/kasbon/angsuran`, `POST /operator/kasbon/petani`) —
+keduanya lewat `ALLOWED_ROLES = [ROLE_OPERATOR, ROLE_CASHIER]`. Rekonsiliasi, kelola modal
+(+ 6 sub-POST), kelola kasir, dasbor ringkasan, dan seluruh portal mitra **tidak pernah** menyebut
+`Constants::ROLE_CASHIER`, sehingga sesi kasir yang mencobanya dijawab `302` ke `/operator/teller`
+**tanpa satu pun tulisan** — untuk GET maupun POST.
 
 **Guard-first.** `$this->requireRole(...)` adalah **pernyataan pertama** setiap method publik
 controller: ia berjalan sebelum pemeriksaan CSRF kedua, sebelum `Security::consumeFormToken()`, dan
@@ -773,6 +786,54 @@ pernah memuat `Brankas Utama`, laba bersih, `pool mitra`, omzet, maupun data mit
 `php database/migrate.php` (terjaga `INFORMATION_SCHEMA`, idempoten, gate `INSTALL_TOKEN`).
 Jangan pernah menyisipkan atau mengurutkan ulang nilai ENUM: MySQL/MariaDB menyimpannya sebagai
 indeks ordinal, sehingga penyisipan di tengah akan memetakan ulang arti baris lama.
+
+### 7.15 Kasbon / piutang petani (Fase 8) — WAJIB
+
+Penambang meminta panjar untuk kowi, solar, dan ongkos sungai. Tanpa pencatatan, uang keluar dari
+Kas Meja Bakar tanpa jejak. Modul ini menjadikannya **piutang** yang dapat ditagih, dengan
+**tiga tabel baru** (tabel ke-11…13; nol `ALTER` pada tabel lama):
+
+| Tabel | Isi |
+|---|---|
+| `miners` | Profil petani. `full_name` **wajib**; `phone_number` (UNIQUE, NULL boleh berulang) dan `location` **opsional** — koleksi data bertahap |
+| `miner_loans` | Satu baris per pencairan: `principal_amount`, `balance_remaining`, `status` (`open`/`settled`), `issued_on` (dasar batas harian) |
+| `miner_loan_ledger` | Riwayat kas: `disbursement`/`repayment`, `payment_method` (`cash`/`nota`), `amount`, `balance_after`, `mutation_id` (**satu baris kas = satu baris ledger**) |
+
+**Batas harian.** `system_settings.daily_loan_limit` (default `500000.00`) membatasi **total pokok
+yang dicairkan hari itu** (`issued_on = hari ini`), bukan per transaksi. Nilai `0` berarti kasbon
+dinonaktifkan; nilai rusak → gagal dengan pesan (fail-closed).
+
+**Pencairan — dua lapis validasi dalam satu transaksi.** `POST /operator/kasbon` menjalankan
+`KasbonService::disburse()`: kunci `cash_registers` (`lockTellerForUpdate()`) → kunci baris
+`daily_loan_limit` (`getForUpdate()`, sehingga dua terminal tidak dapat melewati batas bersama) →
+(a) `Σ pokok hari ini + pokok baru ≤ limit`, (b) `pokok ≤ saldo fisik laci` →
+`miner_loans` + `miner_loan_ledger` + `cash_registers` (turun) + `cash_mutations` (`out`).
+Pelanggaran dijawab `422` dengan angka sisa, **tanpa satu pun tulisan**.
+
+**Angsuran — FIFO, satu mutasi kas.** `POST /operator/kasbon/angsuran` (`KasbonService::repay()`)
+mengunci pinjaman `open` milik petani (`issued_on ASC, created_at ASC, id ASC`), memotong yang
+tertua lebih dulu, menulis **satu** baris ledger per pinjaman tersentuh, dan **satu**
+`cash_mutations` (`in`). Nominal > sisa utang → `422`; pelunasan → `status = settled` +
+`settled_at`.
+
+**Potong nota.** Metode `nota` **tidak** memotong `hulu_transactions`: pembelian hulu tetap dibayar
+penuh dan angsuran dicatat sebagai kas masuk tersendiri. Efek netto laci sama dengan uang yang
+diserahkan, sementara `modal belanja hulu`, laba, dan pool mitra 20 % tidak terdistorsi. Karena itu
+piutang petani **bukan** modal belanja hulu dan **bukan** beban — settlement tidak menyentuhnya.
+
+**Layar & navigasi.** Halaman tunggal **`/operator/kasbon`** memuat batas harian, pencairan,
+angsuran (tombol cepat **20 % / 30 % / Lunas**), pendaftaran petani, daftar peminjam aktif, dan
+buku besar. Autocomplete petani memakai **HTML5 `<datalist>`** native (`Nama — Telepon/Lokasi |
+Sisa Utang: Rp X`) + komponen Alpine `kasbonForm` yang membaca `data-miner-id`/`data-outstanding`
+dari DOM. Tab **Buku Kasbon** adalah tab ke-6 bagi operator dan ke-2 bagi kasir.
+
+**Memasang tabel kasbon pada instalasi yang sudah berjalan.** Jalankan
+`php database/migrate.php` (migrasi **M2**): tiga `CREATE TABLE IF NOT EXISTS` + seed
+`daily_loan_limit`, idempoten, tanpa menyentuh `storage/installed.lock`.
+
+**Membersihkan data uji.** `miner_loan_ledger.mutation_id` memakai `ON DELETE RESTRICT`, jadi hapus
+berurutan: `miner_loan_ledger` → `miner_loans` → `miners`, **sebelum** `cash_mutations` pos kas meja
+(`QcFixture::resetKasbonState()` melakukannya).
 
 ---
 

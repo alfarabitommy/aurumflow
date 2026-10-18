@@ -26,6 +26,7 @@ use AurumFlow\Controllers\ExportController;
 use AurumFlow\Controllers\InvestorAuthController;
 use AurumFlow\Controllers\InvestorController;
 use AurumFlow\Controllers\InvestorOnboardingController;
+use AurumFlow\Controllers\KasbonController;
 use AurumFlow\Controllers\SettlementController;
 use AurumFlow\Controllers\TellerController;
 
@@ -61,6 +62,10 @@ return [
         // Kelola Kasir (Fase 7) — tata kelola akun staf, khusus operator.
         // Kasir yang membukanya diarahkan kembali ke meja kasir tanpa tulisan.
         '/operator/kasir'      => [CashierController::class, 'index'],
+
+        // Buku Kasbon (Fase 8) — permukaan KEDUA yang menerima peran kasir:
+        // pencairan panjar, angsuran tunai/potong nota, dan pendaftaran petani.
+        '/operator/kasbon'     => [KasbonController::class, 'index'],
     ],
 
     'POST' => [
@@ -98,5 +103,12 @@ return [
         '/operator/kasir'              => [CashierController::class, 'store'],
         '/operator/kasir/pin'          => [CashierController::class, 'resetPin'],
         '/operator/kasir/status'       => [CashierController::class, 'setStatus'],
+
+        // Buku Kasbon (Fase 8). Jalur kas: pencairan (`out`), angsuran
+        // tunai/potong nota (`in`), dan pendaftaran petani (tanpa kas). Semua
+        // memakai token sekali-pakai `_once` + PRG.
+        '/operator/kasbon'             => [KasbonController::class, 'disburse'],
+        '/operator/kasbon/angsuran'    => [KasbonController::class, 'repay'],
+        '/operator/kasbon/petani'      => [KasbonController::class, 'storeMiner'],
     ],
 ];

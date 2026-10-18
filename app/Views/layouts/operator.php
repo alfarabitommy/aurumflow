@@ -19,16 +19,19 @@ declare(strict_types=1);
  * dan target sentuh dibuat lebih besar daripada halaman lain.
  *
  * Sejak Fase 7 layout ini melayani **dua peran** dan karena itu navigasinya
- * sadar peran: kasir hanya melihat meja kasir (satu-satunya permukaan yang
- * menerima perannya), sementara operator melihat seluruh tab. Penyembunyian
- * menu bersifat kosmetik — rute terlarangnya tetap dijaga peladen dan dijawab
- * `302` ke beranda peran tanpa tulisan.
+ * sadar peran: kasir hanya melihat meja kasir dan buku kasbon (dua permukaan
+ * yang menerima perannya), sementara operator melihat seluruh tab.
+ * Penyembunyian menu bersifat kosmetik — rute terlarangnya tetap dijaga peladen
+ * dan dijawab `302` ke beranda peran tanpa tulisan.
  *
- * Sejak Fase 8 layout ini juga merender `/dashboard` (lihat
- * `plan/Plan_Unify_UI_AurumFlow.md`), sehingga seluruh halaman pengelola
- * memakai satu kerangka: tab pertama adalah Dashboard, subjudul baris 1
- * mengikuti `$title`, dan baris widget tidak dirender bila view dashboard tidak
- * mengirim `$register`/`$holding`.
+ * Sejak unifikasi kerangka UI (lihat `plan/Plan_Unify_UI_AurumFlow.md`) layout
+ * ini juga merender `/dashboard`, sehingga seluruh halaman pengelola memakai
+ * satu kerangka: tab pertama adalah Dashboard, subjudul baris 1 mengikuti
+ * `$title`, dan baris widget tidak dirender bila view dashboard tidak mengirim
+ * `$register`/`$holding`.
+ *
+ * Sejak Fase 8 (Buku Kasbon) jumlah tab menjadi enam untuk operator dan dua
+ * untuk kasir.
  */
 
 use AurumFlow\Config\App;
@@ -71,6 +74,11 @@ if (!$isCashier) {
     $navItems[] = ['path' => App::url('operator/capital'), 'label' => 'Kelola Modal', 'active' => false];
     $navItems[] = ['path' => App::url('operator/kasir'), 'label' => 'Kelola Kasir', 'active' => false];
 }
+
+// Buku Kasbon (Fase 8) — permukaan yang menerima operator DAN kasir. Diletakkan
+// setelah blok khusus-operator supaya menjadi tab KEENAM bagi operator dan tab
+// KEDUA bagi kasir tanpa cabang tambahan.
+$navItems[] = ['path' => App::url('operator/kasbon'), 'label' => 'Buku Kasbon', 'active' => false];
 
 foreach ($navItems as $index => $item) {
     $itemPath = rtrim((string) $item['path'], '/');

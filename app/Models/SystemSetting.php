@@ -115,4 +115,34 @@ final class SystemSetting
             ['setting_key' => $key]
         );
     }
+
+    /**
+     * Pastikan satu kunci setting terdaftar (Fase 8) — idempoten.
+     *
+     * Dipakai jalur migrasi lapangan (`database/migrate.php` M2) dan
+     * `QcFixture::ensureInstalled()`: keduanya harus dapat dijalankan berkali-kali
+     * tanpa menduplikasi baris maupun menimpa nilai yang sudah diubah operator.
+     * Pola yang sama dengan `User::ensureRoleEnum()` — SQL tetap di `app/Models/`.
+     *
+     * @return bool true bila baris baru dibuat, false bila kunci sudah ada
+     */
+    public static function ensure(string $key, string $value, string $description = ''): bool
+    {
+        $exists = Database::fetchOne(
+            'SELECT `setting_key` FROM `system_settings` WHERE `setting_key` = :setting_key LIMIT 1',
+            ['setting_key' => $key]
+        );
+
+        if ($exists !== null) {
+            return false;
+        }
+
+        Database::insert('system_settings', [
+            'setting_key'   => $key,
+            'setting_value' => $value,
+            'description'   => $description === '' ? null : $description,
+        ]);
+
+        return true;
+    }
 }

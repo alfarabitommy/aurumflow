@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# AurumFlow — menjalankan seluruh QC (Fase 1 s.d. Fase 7)
+# AurumFlow — menjalankan seluruh QC (Fase 1 s.d. Fase 8)
 # ============================================================================
 # Urutan bersifat sengaja:
 #   1. qc_pdo               — memastikan lapisan database sehat lebih dulu
@@ -14,8 +14,9 @@
 #   9. qc_fase_5            — Protokol QC Manual 5 (undangan, PIN, dasbor blind, PWA)
 #  10. qc_fase_6            — Protokol QC Manual 6A (dana talangan + isolasi pool mitra)
 #  11. qc_fase_7            — Protokol QC Manual 7 (peran kasir: isolasi izin & permukaan)
-#  12. qc_sql_injection     — butuh akun operator untuk uji lewat HTTP
-#  13. qc_routing           — butuh akun operator untuk uji login
+#  12. qc_fase_8            — Protokol QC Manual 8 (buku kasbon petani: piutang & kas)
+#  13. qc_sql_injection     — butuh akun operator untuk uji lewat HTTP
+#  14. qc_routing           — butuh akun operator untuk uji login
 #
 # Pemakaian:
 #   bash tests/run_qc.sh
@@ -45,6 +46,7 @@ SUITES=(
     "qc_fase_5"
     "qc_fase_6"
     "qc_fase_7"
+    "qc_fase_8"
     "qc_sql_injection"
     "qc_routing"
 )
@@ -54,7 +56,7 @@ PASSED=()
 
 {
     echo "================================================================"
-    echo "AurumFlow — QC (Fase 1 s.d. Fase 7)"
+    echo "AurumFlow — QC (Fase 1 s.d. Fase 8)"
     echo "Dijalankan : $(date '+%Y-%m-%d %H:%M:%S %Z')"
     echo "PHP        : $(php -r 'echo PHP_VERSION;')"
     echo "Database   : $(php -r 'require "app/Config/bootstrap.php"; echo AurumFlow\Config\Env::get("DB_NAME"), " @ ", AurumFlow\Config\Env::get("DB_HOST");') "
@@ -72,7 +74,7 @@ done
 {
     echo
     echo "================================================================"
-    echo "RINGKASAN QC (FASE 1 s.d. FASE 7)"
+    echo "RINGKASAN QC (FASE 1 s.d. FASE 8)"
     echo "================================================================"
     echo "LULUS : ${#PASSED[@]}/${#SUITES[@]}  ${PASSED[*]:-}"
     echo "GAGAL : ${#FAILED[@]}/${#SUITES[@]}  ${FAILED[*]:-}"

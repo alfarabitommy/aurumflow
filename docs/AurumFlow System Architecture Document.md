@@ -73,13 +73,15 @@ aurumflow/
 │   │   ├── SettlementController.php  # Likuidasi toko & penutupan buku harian
 │   │   ├── CapitalController.php     # Tata kelola modal: setoran, pindah kas, kuota, penarikan, undangan
 │   │   ├── CashierController.php     # Kelola Kasir: buat akun, reset PIN, aktif/nonaktif (Fase 7)
+│   │   ├── KasbonController.php      # Buku Kasbon petani: pencairan, angsuran, daftar petani (Fase 8)
 │   │   ├── InvestorController.php    # Dasbor blind investor & permohonan penarikan (Fase 5)
 │   │   └── ExportController.php      # Laporan ramah cetak + CSV (Fase 5: lingkup investor)
 │   ├── Models/                       # SATU-SATUNYA tempat SQL hidup (lihat AGENTS.md)
 │   │   ├── User / CashRegister / CashMutation / HuluTransaction / DailySettlement /
 │   │   │   SystemSetting.php         # Fase 1-3
 │   │   ├── CapitalWallet / ProfitDistribution / WithdrawalRequest.php   # Fase 4-5
-│   │   └── BridgeLoan.php            # Dana talangan operasional (Fase 6)
+│   │   ├── BridgeLoan.php            # Dana talangan operasional (Fase 6)
+│   │   └── Miner / MinerLoan / MinerLoanLedger.php   # Buku kasbon petani (Fase 8)
 │   ├── Services/                     # Use-case bertransaksi (bukan helper murni)
 │   │   ├── TellerService.php         # Kas keluar hulu — tiga tulisan, satu transaksi
 │   │   ├── SettlementService.php     # Tutup buku harian — tujuh kelompok tulisan
@@ -89,7 +91,8 @@ aurumflow/
 │   │   ├── InvestorService.php       # View-model blind + pengajuan penarikan mitra (Fase 5)
 │   │   ├── PinLoginService.php       # Satu pemilik aturan pintu PIN (mitra & kasir, Fase 7)
 │   │   ├── CashierService.php        # Kelola akun kasir: buat, reset PIN, aktif/nonaktif (Fase 7)
-│   │   └── BridgeLoanService.php     # Fee talangan, penerimaan kas, pengembalian T+1 (Fase 6)
+│   │   ├── BridgeLoanService.php     # Fee talangan, penerimaan kas, pengembalian T+1 (Fase 6)
+│   │   └── KasbonService.php         # Kasbon petani: batas harian, pencairan, angsuran FIFO (Fase 8)
 │   ├── Helpers/
 │   │   ├── Security.php              # Sanitasi input, token CSRF, hashing (kata sandi & PIN + pepper)
 │   │   ├── Formatter.php             # Format Rupiah, gramatur 3 desimal, persen
@@ -101,7 +104,8 @@ aurumflow/
 │       │                             # investor.php (Fase 5), report.php (ramah cetak)
 │       ├── auth/                     # Halaman login kata sandi
 │       ├── cashier/                  # Pintu PIN kasir meja bakar (Fase 7)
-│       ├── operator/                 # Meja kasir (+ modal talangan), rekonsiliasi, kelola modal, kelola kasir
+│       ├── operator/                 # Meja kasir (+ modal talangan), rekonsiliasi, kelola modal, kelola kasir,
+│       │                             # buku kasbon petani (Fase 8)
 │       └── investor/                 # login (PIN), onboarding (waiver), dashboard (blind), report
 ├── public/                           # FOLDER PUBLIK (Diarahkan ke public_html)
 │   ├── assets/
@@ -154,6 +158,14 @@ aurumflow/
 > modal. `Views/cashier/` adalah permukaan masuk tersendiri (layout `auth`), dan tidak ada
 > berkas investor maupun berkas kas yang tersentuh. Rincian & alasan:
 > `plan/Plan_Fase_7_Kasir_AurumFlow.md`.
+
+> **Catatan penempatan (Fase 8).** `KasbonController.php` + `Services/KasbonService.php` memuat
+> use-case buku piutang petani (batas harian, pencairan, angsuran FIFO), sedangkan SQL hidup di
+> tiga model baru (`Miner`, `MinerLoan`, `MinerLoanLedger`) — pola yang sama dengan
+> `BridgeLoan`/`BridgeLoanService`. Controller ini adalah **permukaan kedua** yang menerima peran
+> `cashier` (setelah `TellerController`), sehingga isolasi peran tetap bersifat *allow-list*.
+> `app.min.css` **tidak dikompilasi ulang**: view baru hanya memakai kelas yang sudah ada di
+> berkas hasil kompilasi. Rincian & alasan: `plan/Plan_Kasbon_Petani_AurumFlow.md`.
 
 ---
 
@@ -273,12 +285,14 @@ Aturan ini mencegah peretasan melalui *web shell* jika ada berkas berbahaya yang
   (Kasir Meja Bakar, PIN di `POST /cashier/login`). PIN kasir disimpan **ber-pepper** pada kolom
   `users.password_hash` yang sudah ada, sehingga PIN itu tidak pernah sah di pintu kata sandi;
   pintu kata sandi juga **menolak** akun ber-`role = cashier` secara eksplisit.
-* ***Allow-list*, bukan *deny-list*.** Satu-satunya permukaan yang menerima peran `cashier` adalah
-  `TellerController` (`GET /operator/teller`, `POST /operator/teller`,
-  `POST /operator/teller/talangan`) melalui daftar izin eksplisit
-  `[ROLE_OPERATOR, ROLE_CASHIER]`. Seluruh controller lain memakai
+* ***Allow-list*, bukan *deny-list*.** Permukaan yang menerima peran `cashier` adalah daftar izin
+  **eksplisit** dan berjumlah **dua** (sejak Fase 8): `TellerController`
+  (`GET /operator/teller`, `POST /operator/teller`, `POST /operator/teller/talangan`) dan
+  `KasbonController` (`GET /operator/kasbon`, `POST /operator/kasbon`,
+  `POST /operator/kasbon/angsuran`, `POST /operator/kasbon/petani`), keduanya dengan
+  `ALLOWED_ROLES = [ROLE_OPERATOR, ROLE_CASHIER]`. Seluruh controller lain memakai
   `requireRole(Constants::ROLE_OPERATOR)` (atau `ROLE_INVESTOR`) dan **tidak pernah** menyebut
-  `ROLE_CASHIER`.
+  `ROLE_CASHIER` (`qc_fase_7` F.3b, `qc_fase_8` F.6).
 * **Guard-first.** `requireRole(...)` adalah **pernyataan pertama** setiap method publik controller —
   sebelum pemeriksaan CSRF kedua, sebelum `Security::consumeFormToken()`, dan sebelum transaksi
   basis data. Akibatnya sesi kasir yang mencoba rute terlarang dijawab `302` menuju beranda
@@ -289,18 +303,55 @@ Aturan ini mencegah peretasan melalui *web shell* jika ada berkas berbahaya yang
   URL; `render()` menyuntikkan `$auth` sehingga layout tidak perlu membaca `$_SESSION` sendiri.
   Label peran hidup satu kali di `Constants::ROLE_LABELS`.
 * **Permukaan kasir bebas data pemilik.** Berkas yang terjangkau sesi kasir
-  (`TellerController`, `Views/operator/teller.php`, `Views/layouts/operator.php`,
-  `Views/cashier/login.php`, `TellerService`, `BridgeLoanService`) tidak boleh menyebut
-  `BRANKAS_NAME`/`findBrankas`, dompet modal (`CapitalWallet`), `SystemSetting`, maupun angka
-  bagi hasil (`laba bersih`, `pool mitra`, `omzet`). Navigasi operator (Dashboard, Rekonsiliasi,
-  Kelola Modal, Kelola Kasir) disembunyikan bagi kasir di `Views/layouts/operator.php`.
+  (`TellerController`, `KasbonController`, `Views/operator/teller.php`,
+  `Views/operator/kasbon.php`, `Views/layouts/operator.php`, `Views/cashier/login.php`,
+  `TellerService`, `BridgeLoanService`, `KasbonService`, dan ketiga model kasbon) tidak boleh
+  menyebut `BRANKAS_NAME`/`findBrankas`, dompet modal (`CapitalWallet`), angka bagi hasil
+  (`laba bersih`, `pool mitra`, `omzet`), maupun `profit_distributions`. Pengecualian sempit
+  sejak Fase 8: `KasbonService` **boleh** membaca `SystemSetting` **hanya** untuk
+  `SETTING_DAILY_LIMIT` — batas operasional yang memang perlu diketahui kasir — dan tidak untuk
+  kunci lain (`qc_fase_8` G.5). Navigasi operator (Dashboard, Rekonsiliasi, Kelola Modal, Kelola
+  Kasir) disembunyikan bagi kasir di `Views/layouts/operator.php`; yang tersisa hanya Kasir dan
+  Buku Kasbon.
 * **Satu kerangka 2-tier untuk seluruh halaman pengelola.** `/dashboard` dan semua layar
   `/operator/*` memakai `Views/layouts/operator.php`; layout-nya dipilih controller
   (`render($view, $data, self::LAYOUT)`), sehingga dashboard tidak lagi memakai shell 1-tier
   `Views/layouts/app.php` (layout itu tetap ada sebagai default `render()` dan dijaga
-  `qc_fase_5` I.10). Baris bawah layout adalah navigasi tab tersegmen — 5 tab untuk operator,
-  1 tab untuk kasir — dengan penanda aktif diturunkan dari `REQUEST_URI` dan penggeseran
+  `qc_fase_5` I.10). Baris bawah layout adalah navigasi tab tersegmen — **6 tab** untuk operator,
+  **2 tab** untuk kasir — dengan penanda aktif diturunkan dari `REQUEST_URI` dan penggeseran
   horizontal pada ponsel.
+
+### 4.7. Buku Kasbon Petani & Validasi Dua Lapis (Fase 8)
+
+* **Kas keluar atomik.** Pencairan kasbon adalah **satu** `Database::transaction()`:
+  kunci `cash_registers` (`lockTellerForUpdate()`) → kunci baris `system_settings`
+  (`daily_loan_limit`, `getForUpdate()`) → hitung `Σ pokok hari ini` → dua validasi → tulis
+  `miner_loans` + `miner_loan_ledger` + `cash_registers` (turun) + `cash_mutations` (`out`).
+  Urutan penguncian global menjadi
+  `capital_wallets → cash_registers → bridge_loans → miner_loans → hulu_transactions → system_settings`;
+  jalur ini tidak menyentuh dompet, talangan, maupun hulu, sehingga tidak membentuk siklus tunggu
+  dengan tutup buku.
+* **Dua lapis validasi, keduanya di dalam kunci.** (a) `Σ pokok yang dicairkan hari ini + pokok
+  baru ≤ daily_loan_limit` — mengunci baris setting membuat dua terminal tidak dapat melewati
+  batas bersama; (b) `pokok ≤ saldo Kas Meja Bakar`. Pelanggaran → `422` **tanpa satu pun
+  tulisan** dengan pesan yang menyebut angka sisa. `daily_loan_limit = 0` berarti kasbon
+  dinonaktifkan (pesan eksplisit, bukan galat teknis).
+* **Angsuran FIFO, satu mutasi kas.** Pembayaran (tunai maupun potong nota) mengunci
+  `miner_loans` ber-`status='open'` milik petani dengan urutan
+  `issued_on ASC, created_at ASC, id ASC` (pola `BridgeLoan::lockActiveForUpdate()`), memotong
+  pinjaman tertua lebih dulu, menulis **satu** baris ledger per pinjaman tersentuh, dan **satu**
+  `cash_mutations` masuk sebesar total — sehingga uang fisik yang diterima kasir selalu sama
+  dengan jejak pembukuan.
+* **Potong nota tidak memotong nota.** Pembelian hulu tetap dibayar penuh
+  (`hulu_transactions.net_cash_paid`), dan angsuran potong nota dicatat sebagai kas masuk
+  tersendiri. Efek netto laci identik dengan uang yang benar-benar diserahkan, sementara
+  `modal belanja hulu` — dasar laba, bagi hasil 80 : 20, dan pool mitra — tetap utuh. Karena itu
+  tabel `hulu_transactions` **tidak** diubah (nol `ALTER`).
+* **Nominal tidak pernah dipercaya dari klien.** Form hanya mengirim pemilih petani, nominal,
+  metode, dan catatan; sisa utang, batas harian, dan `balance_after` dihitung ulang dari basis
+  data. Pemilih petani boleh berupa teks label (`miner_id` diisi peramban), dan peladen
+  menyelesaikannya lewat `KasbonService::resolveMiner()` dengan empat tingkat: UUID sah →
+  label kandidat → nama eksak → `422`.
 
 ---
 

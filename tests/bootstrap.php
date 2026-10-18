@@ -30,9 +30,13 @@ use AurumFlow\Models\BridgeLoan;
 use AurumFlow\Models\CapitalWallet;
 use AurumFlow\Models\CashRegister;
 use AurumFlow\Models\HuluTransaction;
+use AurumFlow\Models\Miner;
+use AurumFlow\Models\MinerLoan;
+use AurumFlow\Models\MinerLoanLedger;
 use AurumFlow\Models\SystemSetting;
 use AurumFlow\Models\User;
 use AurumFlow\Services\BridgeLoanService;
+use AurumFlow\Services\KasbonService;
 use AurumFlow\Services\OnboardingService;
 use AurumFlow\Services\SettlementService;
 use AurumFlow\Services\TellerService;
@@ -447,6 +451,17 @@ final class QcFixture
         // lapangan (`database/migrate.php`) — satu pemilik: User::ensureRoleEnum().
         User::ensureRoleEnum();
 
+        // Fase 8: tiga tabel buku kasbon + `daily_loan_limit`. Jalur yang sama
+        // dengan `database/migrate.php` M2 — satu pemilik: `Miner::ensureSchema()`
+        // dan `SystemSetting::ensure()`. Dijalankan SEBELUM `schema.sql` supaya
+        // basis data uji yang lebih tua dari skema tetap lengkap.
+        Miner::ensureSchema();
+        SystemSetting::ensure(
+            KasbonService::SETTING_DAILY_LIMIT,
+            '500000.00',
+            'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)'
+        );
+
         Database::executeSqlFile(DATABASE_PATH . '/schema.sql');
         Database::executeSqlFile(DATABASE_PATH . '/seed.sql');
 
@@ -589,7 +604,12 @@ final class QcFixture
         $registerId = (string) $register['id'];
         $openingBalance = '50000000.00';
 
-        // Talangan lebih dulu (Fase 6): baris `bridge_loans` menunjuk pos kas &
+        // Kasbon lebih dulu (Fase 8): `miner_loan_ledger.mutation_id` memakai FK
+        // `ON DELETE RESTRICT` ke `cash_mutations`, dan suite ini mengosongkan
+        // mutasi pos kas meja — tanpa urutan ini penghapusan mutasi gagal.
+        self::resetKasbonState();
+
+        // Talangan berikutnya (Fase 6): baris `bridge_loans` menunjuk pos kas &
         // sesi tutup buku, dan suite ini mengosongkan mutasi pos kas meja —
         // membiarkannya hidup berarti talangan tanpa kas masuk yang tercatat.
         self::resetBridgeState();
@@ -710,7 +730,11 @@ final class QcFixture
      */
     public static function clearSettlementTraces(): void
     {
-        // Talangan lebih dulu (Fase 6): `bridge_loans.settlement_id` memakai FK
+        // Kasbon paling awal (Fase 8): FK RESTRICT ke `cash_mutations` (lihat
+        // `resetKasbonState()`), yang dihapus beberapa langkah di bawah.
+        self::resetKasbonState();
+
+        // Talangan berikutnya (Fase 6): `bridge_loans.settlement_id` memakai FK
         // `ON DELETE RESTRICT`, jadi baris anak harus dibuang sebelum sesi.
         self::resetBridgeState();
 
@@ -1578,6 +1602,222 @@ final class QcFixture
     public static function clearPinThrottle(): int
     {
         return PinThrottle::clearAll();
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase 8 — buku kasbon petani
+    // -----------------------------------------------------------------------
+
+    /**
+     * Petani QC Fase 8 — nama berawalan `QC ` supaya mudah dibersihkan.
+     */
+    public const QC_MINER = [
+        'full_name'    => 'QC Petani Kasbon',
+        'phone_number' => '089500000201',
+        'location'     => 'Sungai QC',
+    ];
+
+    /**
+     * Petani kedua: pembanding untuk uji FIFO & isolasi daftar.
+     * Sengaja TANPA telepon/lokasi (menguji koleksi data bertahap).
+     */
+    public const QC_MINER_SECOND = [
+        'full_name'    => 'QC Petani Cadangan',
+        'phone_number' => '',
+        'location'     => '',
+    ];
+
+    /** Prefiks nama petani uji (dibersihkan setiap kali fixture dijalankan). */
+    public const QC_MINER_PREFIX = 'QC Petani%';
+
+    /**
+     * Bersihkan seluruh jejak buku kasbon (Fase 8). Idempoten.
+     *
+     * Urutan WAJIB: `miner_loan_ledger` → `miner_loans` → `miners`, karena
+     * `miner_loan_ledger.loan_id` dan `miner_loans.miner_id` memakai FK
+     * `ON DELETE RESTRICT`. Mutasi kas yang ditunjuk ledger ikut dibuang lebih
+     * dulu (FK `mutation_id` juga RESTRICT) — tanpa itu `resetTellerState()`
+     * tidak dapat mengosongkan `cash_mutations` pos kas meja.
+     *
+     * Saldo pos kas TIDAK disentuh di sini (urusan `resetTellerState()`), pola
+     * yang sama dengan `resetBridgeState()`.
+     *
+     * Seperti `resetTellerState()` mengosongkan seluruh `hulu_transactions`,
+     * fungsi ini mengosongkan seluruh baris ketiga tabel kasbon: basis data QC
+     * adalah basis data uji, bukan data operasional.
+     */
+    public static function resetKasbonState(): void
+    {
+        $mutationIds = Database::fetchAll('SELECT `mutation_id` FROM `miner_loan_ledger`');
+
+        Database::query('DELETE FROM `miner_loan_ledger`');
+        Database::query('DELETE FROM `miner_loans`');
+        Database::query('DELETE FROM `miners`');
+
+        foreach ($mutationIds as $row) {
+            $mutationId = (string) ($row['mutation_id'] ?? '');
+
+            if ($mutationId !== '') {
+                Database::query(
+                    'DELETE FROM `cash_mutations` WHERE `id` = :id',
+                    ['id' => $mutationId]
+                );
+            }
+        }
+    }
+
+    /**
+     * Siapkan satu petani QC lewat jalur kode nyata (`KasbonService::registerMiner()`).
+     *
+     * @param array<string, string> $override nilai form yang ditimpa
+     * @return array<string, mixed> ringkasan `registerMiner()`
+     */
+    public static function seedQcMiner(array $override = []): array
+    {
+        self::ensureInstalled();
+
+        $input = array_merge(self::QC_MINER, $override);
+        $existing = $input['phone_number'] === ''
+            ? null
+            : Miner::findByPhone((string) $input['phone_number']);
+
+        if ($existing !== null && (string) $existing['full_name'] === (string) $input['full_name']) {
+            return [
+                'id'           => (string) $existing['id'],
+                'full_name'    => (string) $existing['full_name'],
+                'phone_number' => $existing['phone_number'],
+                'location'     => $existing['location'],
+            ];
+        }
+
+        return KasbonService::registerMiner($input);
+    }
+
+    /**
+     * Cairkan satu kasbon lewat jalur nyata (`KasbonService::disburse()`).
+     *
+     * Bukan INSERT langsung: yang diuji adalah perilaku sistem (dua lapis
+     * validasi, transaksi, mutasi kas), bukan kemampuan menulis tabel.
+     *
+     * @param array<string, string> $override nilai form yang ditimpa
+     * @return array<string, mixed> ringkasan `disburse()`
+     */
+    public static function seedQcKasbon(
+        string $minerId,
+        string $principal = '250.000',
+        array $override = []
+    ): array {
+        return KasbonService::disburse($override + [
+            'miner_id'         => $minerId,
+            'miner_label'      => '',
+            'principal_amount' => $principal,
+            'notes'            => 'QC kasbon',
+            'actor_id'         => null,
+        ]);
+    }
+
+    /**
+     * Potret keadaan buku kasbon + saldo pos kas meja.
+     *
+     * Dipakai assertion diferensial "nol tulisan": dua potret yang identik
+     * membuktikan permintaan ditolak SEBELUM ada perubahan apa pun.
+     *
+     * @return array<string, mixed>
+     */
+    public static function kasbonSnapshot(): array
+    {
+        $loans = Database::fetchOne(
+            'SELECT COUNT(*) AS `total`, COALESCE(SUM(`principal_amount`), 0) AS `principal`, '
+            . 'COALESCE(SUM(`balance_remaining`), 0) AS `balance` FROM `miner_loans`'
+        );
+
+        $ledger = Database::fetchOne('SELECT COUNT(*) AS `total` FROM `miner_loan_ledger`');
+        $miners = Database::fetchOne('SELECT COUNT(*) AS `total` FROM `miners`');
+        $register = CashRegister::activeTeller();
+
+        return [
+            'miners'         => (int) ($miners['total'] ?? 0),
+            'loans'          => (int) ($loans['total'] ?? 0),
+            'principal'      => self::canonicalMoney((string) ($loans['principal'] ?? '0')),
+            'balance'        => self::canonicalMoney((string) ($loans['balance'] ?? '0')),
+            'ledger'         => (int) ($ledger['total'] ?? 0),
+            'teller_balance' => $register === null ? '0.00' : (string) $register['current_balance'],
+            'mutations'      => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `cash_mutations` WHERE `register_id` = :register_id',
+                ['register_id' => (string) ($register['id'] ?? '')]
+            )['total'] ?? 0),
+        ];
+    }
+
+    /**
+     * Hapus petani uji beserta riwayatnya (urutan FK), idempoten.
+     *
+     * Berbeda dengan `resetKasbonState()` yang mengosongkan seluruh tabel, fungsi
+     * ini hanya menyentuh baris QC — dipakai suite yang harus meninggalkan data
+     * pengujian lapangan apa adanya.
+     */
+    public static function purgeQcMiners(): int
+    {
+        $rows = Database::fetchAll(
+            'SELECT `id` FROM `miners` WHERE `full_name` LIKE :prefix',
+            ['prefix' => self::QC_MINER_PREFIX]
+        );
+
+        $deleted = 0;
+
+        foreach ($rows as $row) {
+            $minerId = (string) ($row['id'] ?? '');
+
+            if ($minerId === '') {
+                continue;
+            }
+
+            $loans = Database::fetchAll(
+                'SELECT `id` FROM `miner_loans` WHERE `miner_id` = :miner_id',
+                ['miner_id' => $minerId]
+            );
+
+            foreach ($loans as $loan) {
+                $loanId = (string) ($loan['id'] ?? '');
+
+                if ($loanId === '') {
+                    continue;
+                }
+
+                $mutations = Database::fetchAll(
+                    'SELECT `mutation_id` FROM `miner_loan_ledger` WHERE `loan_id` = :loan_id',
+                    ['loan_id' => $loanId]
+                );
+
+                Database::query(
+                    'DELETE FROM `miner_loan_ledger` WHERE `loan_id` = :loan_id',
+                    ['loan_id' => $loanId]
+                );
+
+                foreach ($mutations as $mutation) {
+                    $mutationId = (string) ($mutation['mutation_id'] ?? '');
+
+                    if ($mutationId !== '') {
+                        Database::query(
+                            'DELETE FROM `cash_mutations` WHERE `id` = :id',
+                            ['id' => $mutationId]
+                        );
+                    }
+                }
+
+                Database::query(
+                    'DELETE FROM `miner_loans` WHERE `id` = :id',
+                    ['id' => $loanId]
+                );
+            }
+
+            $deleted += Database::query(
+                'DELETE FROM `miners` WHERE `id` = :id',
+                ['id' => $minerId]
+            )->rowCount();
+        }
+
+        return $deleted;
     }
 
     /**

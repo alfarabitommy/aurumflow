@@ -6,7 +6,7 @@ declare(strict_types=1);
 |--------------------------------------------------------------------------
 | QC-4 — Seed Reading & Integritas Skema ERD
 |--------------------------------------------------------------------------
-| Membuktikan bahwa DDL ERD diterapkan apa adanya: 10 tabel, konvensi tipe
+| Membuktikan bahwa DDL ERD diterapkan apa adanya: 13 tabel, konvensi tipe
 | data (DECIMAL(14,2) / DECIMAL(8,3) / DECIMAL(5,2)), primary key UUID
 | CHAR(36), seed system_settings lengkap, dan guard database/install.php.
 */
@@ -41,6 +41,10 @@ $erdTables = [
     'profit_distributions',
     'withdrawal_requests',
     'bridge_loans',
+    // Fase 8 — buku kasbon petani (tabel baru, nol ALTER pada tabel lama).
+    'miners',
+    'miner_loans',
+    'miner_loan_ledger',
 ];
 
 // ---------------------------------------------------------------------------
@@ -195,6 +199,11 @@ $moneyExpectations = [
     ['bridge_loans', 'fee_amount', 14, 2],
     ['bridge_loans', 'fee_absorbed', 14, 2],
     ['bridge_loans', 'fee_uncovered', 14, 2],
+    // Fase 8 — uang kasbon tetap DECIMAL(14,2), tanpa float.
+    ['miner_loans', 'principal_amount', 14, 2],
+    ['miner_loans', 'balance_remaining', 14, 2],
+    ['miner_loan_ledger', 'amount', 14, 2],
+    ['miner_loan_ledger', 'balance_after', 14, 2],
 ];
 
 $moneyViolations = QcFixture::checkDecimalConventions($moneyExpectations);
@@ -235,6 +244,50 @@ Qc::ok(
     'Kolom persentase memakai DECIMAL(5,2)',
     $percentViolations === [],
     implode("\n", $percentViolations)
+);
+
+// ---------------------------------------------------------------------------
+// Fase 8 — semantik kunci tabel buku kasbon (nol ALTER pada tabel lama)
+// ---------------------------------------------------------------------------
+
+$kasbonFkRows = Database::fetchAll(
+    'SELECT `TABLE_NAME`, `CONSTRAINT_NAME`, `REFERENCED_TABLE_NAME`, `DELETE_RULE` '
+    . 'FROM information_schema.referential_constraints '
+    . 'WHERE constraint_schema = DATABASE() AND `TABLE_NAME` IN (:l, :g, :m)',
+    ['l' => 'miner_loans', 'g' => 'miner_loan_ledger', 'm' => 'miners']
+);
+
+$kasbonFkRules = [];
+
+foreach ($kasbonFkRows as $row) {
+    $kasbonFkRules[(string) $row['CONSTRAINT_NAME']] = (string) $row['DELETE_RULE'];
+}
+
+ksort($kasbonFkRules);
+
+$kasbonPhoneIndex = Database::fetchOne(
+    'SELECT COUNT(*) AS `total` FROM information_schema.statistics '
+    . 'WHERE table_schema = DATABASE() AND table_name = :table AND index_name = :index',
+    ['table' => 'miners', 'index' => 'uq_miner_phone']
+);
+
+$kasbonSchemaSource = (string) file_get_contents(DATABASE_PATH . '/schema.sql');
+
+Qc::ok(
+    '4.7f',
+    'Tabel kasbon Fase 8: FK RESTRICT pada riwayat, SET NULL pada pencatat, telepon unik',
+    $kasbonFkRules === [
+        'fk_ledger_loan'     => 'RESTRICT',
+        'fk_ledger_mutation' => 'RESTRICT',
+        'fk_ledger_recorder' => 'SET NULL',
+        'fk_ledger_register' => 'RESTRICT',
+        'fk_loan_issuer'     => 'SET NULL',
+        'fk_loan_miner'      => 'RESTRICT',
+    ]
+        && (int) ($kasbonPhoneIndex['total'] ?? 0) === 1
+        && substr_count($kasbonSchemaSource, 'CREATE TABLE IF NOT EXISTS') === 13
+        && !preg_match('/ALTER\s+TABLE/i', $kasbonSchemaSource),
+    json_encode($kasbonFkRules)
 );
 
 // Primary key UUID -> CHAR(36)
@@ -336,6 +389,7 @@ $expectedSettings = [
     'default_burn_fee_operator_cut' => '10000.00',
     'notice_period_days'            => '7',
     'active_carryover_deficit'      => '0.00',
+    'daily_loan_limit'              => '500000.00',
 ];
 
 $settingProblems = [];
@@ -350,7 +404,7 @@ foreach ($expectedSettings as $key => $expected) {
 
 Qc::ok(
     '4.10c',
-    'Seluruh 6 nilai seed system_settings sesuai ERD',
+    'Seluruh 7 nilai seed system_settings sesuai ERD',
     $settingProblems === [] && count($settings) === count($expectedSettings),
     'jumlah=' . count($settings) . ' diharapkan=' . count($expectedSettings) . "\n" . implode("\n", $settingProblems)
 );

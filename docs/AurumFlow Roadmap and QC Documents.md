@@ -341,7 +341,7 @@ Jalankan pada lingkungan lokal dengan angka baku QC 3 (emas *holding* 18,050 gr,
 * [ ] Persiapan direktori cPanel: letakkan folder `app/` di luar `public_html`, dan isi folder `public/` ke dalam `public_html`.
 * [ ] Penyesuaian path berkas `public_html/index.php` menuju direktori inti `../app/`.
 * [ ] Pembuatan basis data MySQL dan akun basis data di cPanel MySQL Database Wizard.
-* [ ] Impor skema tabel final via phpMyAdmin cPanel (10 tabel, termasuk `bridge_loans`) dan perbarui berkas konfigurasi `app/Config/Database.php`.
+* [ ] Impor skema tabel final via phpMyAdmin cPanel (**13 tabel**: sembilan tabel Fase 1, `bridge_loans`, dan `miners`/`miner_loans`/`miner_loan_ledger`) atau jalankan `php database/migrate.php` untuk migrasi aditif, lalu perbarui berkas konfigurasi `app/Config/Database.php`.
 * [ ] Verifikasi konfigurasi `.htaccess` pada folder unggahan nota untuk mematikan eksekusi skrip PHP berbahaya.
 
 #### Protokol QC Manual 6B: Checklist Akhir di Server Produksi
@@ -395,6 +395,46 @@ Jalankan pada lingkungan lokal dengan akun kasir uji (nomor `089700000101`, PIN 
 
 ---
 
+### FASE 8: Modul Kasbon / Piutang Petani (*Miner Loan & Ledger*)
+**Fokus:** Mencatat panjar tunai kepada penambang sebagai **piutang** yang dapat ditagih — bukan kas hilang tanpa jejak. Pencairan mengurangi `Kas Meja Bakar` dengan dua lapis validasi (batas harian dari `system_settings` **dan** saldo fisik laci), pembayaran diterima **tunai** maupun **potong nota**, dan antrean meja timbang tidak berhenti karena autocomplete `<datalist>`.
+
+#### Daftar Tugas Teknis (Checklist)
+* [x] Tiga **tabel baru** — `miners`, `miner_loans`, `miner_loan_ledger` — dan **nol ALTER** pada sepuluh tabel lama; migrasi lapangan **M2** pada `php database/migrate.php` (terjaga `INFORMATION_SCHEMA`, idempoten, gate `INSTALL_TOKEN`).
+* [x] Satu kunci `system_settings` baru: `daily_loan_limit` (default `500000.00`), pola seed `INSERT … WHERE NOT EXISTS`; nilai `0` berarti kasbon dinonaktifkan; nilai rusak → gagal dengan pesan (fail-closed).
+* [x] Profil petani dikumpulkan **bertahap**: `full_name` wajib; `phone_number` (UNIQUE, NULL boleh berulang) dan `location` opsional, sehingga pendaftaran di meja timbang tidak menahan antrean.
+* [x] Pencairan = **satu** `Database::transaction()`: kunci `cash_registers` → kunci baris `daily_loan_limit` → validasi batas harian (`Σ pokok hari ini + pokok baru ≤ limit`) → validasi saldo fisik → `miner_loans` + `miner_loan_ledger` + `cash_registers` (turun) + `cash_mutations` (`out`).
+* [x] Angsuran = satu transaksi dengan **FIFO** (`issued_on ASC, created_at ASC, id ASC`, pola `BridgeLoan::lockActiveForUpdate()`): satu baris ledger per pinjaman tersentuh + **satu** mutasi `in` sebesar total; nominal > sisa utang ditolak `422` tanpa tulisan.
+* [x] "Potong Nota" **tidak** memotong `hulu_transactions`: pembelian hulu tetap dibayar penuh, angsuran dicatat sebagai kas masuk tersendiri sehingga `modal belanja hulu`, laba, dan pool mitra 20 % tidak terdistorsi.
+* [x] Halaman **`/operator/kasbon`** (satu halaman, semua form) + tab **Buku Kasbon** di `Views/layouts/operator.php` (tab ke-6 bagi operator, ke-2 bagi kasir).
+* [x] Autocomplete petani memakai **HTML5 `<datalist>`** native + komponen Alpine `kasbonForm` (tombol cepat 20 % / 30 % / Lunas, pratinjau sisa utang); `CACHE_NAME` dinaikkan ke **`aurumflow-shell-v3`** karena `app.js` berubah, sementara `app.min.css` **tidak dikompilasi ulang**.
+* [x] **Dua permukaan izin kasir** (*allow-list*): `TellerController` dan `KasbonController`; setiap controller lain tetap menolak `cashier` dengan `302` tanpa tulisan (guard-first).
+* [x] Suite baru `tests/qc_fase_8.php` (grup B–J) membuktikan atomisitas, dua lapis validasi, FIFO, isolasi data pemilik, kontrak statis, dan nol kompilasi CSS.
+
+#### Protokol QC Manual 8: Buku Kasbon Petani
+Jalankan pada lingkungan lokal setelah `php database/migrate.php`:
+
+| Parameter Uji | Data Masukan | Hasil yang Diharapkan | Status |
+| :--- | :--- | :--- | :---: |
+| **Daftar petani baru** | `/operator/kasbon` → kartu "Daftarkan Petani Baru" → nama saja | Petani tampil, halaman kembali dengan petani tersebut terpilih (`?miner=<uuid>`); telepon & lokasi boleh kosong | [x] |
+| **Pencairan kasbon** | Petani + nominal `250.000` | Flash sukses; saldo **Kas Meja Bakar turun persis** `250.000`; baris piutang `open` + satu mutasi `out` | [x] |
+| **Batas harian** | Nominal melebihi sisa batas (mis. `400.000` saat sisa `250.000`) | `422` "Sisa batas kasbon hari ini …"; **nol** tulisan (saldo & piutang tidak berubah) | [x] |
+| **Saldo fisik laci** | Nominal melebihi saldo Kas Meja Bakar | `422` "Saldo Kas Meja Bakar hanya …"; nol tulisan | [x] |
+| **Angsuran tunai** | Petani + `50.000` + metode **Tunai** | Saldo kas **naik** `50.000`; sisa utang turun; ledger `repayment`/`cash` | [x] |
+| **Potong nota** | Petani + `50.000` + metode **Potong Nota** | Sama seperti tunai, tetapi `payment_method = nota`; `hulu_transactions` **tidak** berubah | [x] |
+| **Tombol cepat** | Tekan `20 %`, `30 %`, lalu `Lunas` | Isian nominal terisi otomatis (`20 %`/`30 %` dari sisa utang); `Lunas` mengisi tepat sisa utang | [x] |
+| **Lunas** | Kirim nominal = sisa utang | Baris piutang menjadi `settled`; sisa utang `0,00`; petani dapat mengajukan kasbon baru | [x] |
+| **Angsuran berlebih** | Nominal > sisa utang | `422` "Sisa utang … hanya Rp X"; nol tulisan | [x] |
+| **Dua kasbon sekaligus** | Dua pencairan, lalu satu angsuran yang melewati pinjaman pertama | Kasbon **tertua** lunas lebih dulu; dua baris ledger, **satu** mutasi kas | [x] |
+| **Kasir memakai buku kasbon** | Login `/cashier/login` → tab **Buku Kasbon** → cairkan + angsuran | Berhasil; tidak ada kata **Brankas**, laba bersih, pool mitra, maupun tautan Rekonsiliasi/Kelola Modal di layar | [x] |
+| **Mitra mencoba kasbon** | Login `/investor/login` → buka & kirim form kasbon | `302` ke `/investor/dashboard`; **nol** tulisan; token `_once` tidak dikonsumsi | [x] |
+| **Migrasi lapangan** | `php database/migrate.php` dua kali | Keduanya exit 0, jalankan kedua "sudah diterapkan"; `storage/installed.lock` tidak tersentuh | [x] |
+
+> **Catatan Protokol 8.** Seluruh baris di atas dihasilkan otomatis oleh `tests/qc_fase_8.php`
+> (grup B–J). Piutang petani **bukan** modal belanja hulu dan **bukan** beban: ia hanya
+> menggerakkan kas fisik, sehingga angka bagi hasil 80 : 20 tidak pernah terpengaruh oleh kasbon.
+
+---
+
 ## 3. Matriks Estimasi Waktu & Urutan Pengerjaan
 
 | Tahapan Kerja | Estimasi Durasi | Target Capaian Utama |
@@ -407,4 +447,5 @@ Jalankan pada lingkungan lokal dengan akun kasir uji (nomor `089700000101`, PIN 
 | **Sprint 6 (Fase 6A)** | 1 – 2 Hari | Modul dana talangan: tabel `bridge_loans`, modal penerimaan di kasir, auto-pay fee pada tutup buku, dan isolasi pool mitra. |
 | **Sprint 6 (Fase 6B)** | 2 – 3 Hari | Simulasi perputaran tiga hari (termasuk satu siklus talangan), *hardening* keamanan cPanel, dan peluncuran produksi (*go-live*). |
 | **Sprint 7 (Fase 7)** | 2 – 3 Hari | Peran kasir terpisah: PIN 6 digit, pintu `/cashier/login`, *allow-list* meja kasir + talangan, layar "Kelola Kasir", dan navbar sadar peran. |
-| **Total Estimasi** | **~20 – 26 Hari** | **Sistem Siap Operasi Penuh di Lapangan** |
+| **Sprint 8 (Fase 8)** | 2 – 3 Hari | Buku kasbon petani: tiga tabel baru, batas harian, autocomplete `<datalist>`, angsuran tunai/potong nota, dan tab Buku Kasbon. |
+| **Total Estimasi** | **~22 – 29 Hari** | **Sistem Siap Operasi Penuh di Lapangan** |
