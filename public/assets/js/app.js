@@ -388,6 +388,17 @@
             bridgeFixed: '',
             bridgeNotes: '',
 
+            // --- Beban operasional / OPEX (Fase 9) ----------------------------
+            // Modal "Catat Beban Kas". Sama seperti talangan: state hidup di
+            // komponen yang SUDAH terdaftar supaya aset yang di-cache peramban
+            // tidak dapat membuat modalnya hilang.
+            opexOpen: false,
+            opexSubmitting: false,
+            opexCategory: 'coordination',
+            opexPayee: '',
+            opexAmount: '',
+            opexNotes: '',
+
             /**
              * Ambil nilai awal dari DOM (bukan dari atribut JavaScript) supaya
              * teks kiriman pengguna tidak pernah masuk ke dalam kode JS.
@@ -413,6 +424,13 @@
                 this.bridgeFeeType = formRadioValue(this, 'fee_type', this.bridgeFeeType) === 'pct'
                     ? 'pct'
                     : 'fixed';
+
+                // Modal beban operasional (Fase 9): kategori dari `select` yang
+                // dirender peladen, isian lain dari DOM.
+                this.opexCategory = formFieldValue(this, 'opex_category') || this.opexCategory;
+                this.opexPayee = formFieldValue(this, 'opex_payee');
+                this.opexAmount = formFieldValue(this, 'opex_amount');
+                this.opexNotes = formFieldValue(this, 'opex_notes');
             },
 
             get weightMilligrams() {
@@ -520,6 +538,19 @@
                 return this.bridgePrincipalCents > 0
                     && this.bridgeLender.trim() !== ''
                     && !this.bridgeSubmitting;
+            },
+
+            // --- Cermin modal beban operasional (Fase 9) ----------------------
+            // Peladen tetap memvalidasi ulang (`ExpenseService::pay()`); nilai di
+            // sini hanya untuk menyalakan tombol kirim.
+            get opexAmountCents() {
+                return AurumInput.moneyCents(this.opexAmount);
+            },
+
+            get opexSubmitReady() {
+                return this.opexAmountCents > 0
+                    && this.opexPayee.trim() !== ''
+                    && !this.opexSubmitting;
             },
 
             /** Jarak geser maksimum: lebar lintasan dikurangi lebar pegangan. */
@@ -868,10 +899,26 @@
             bridgeFeeCents: Number(options.bridge_fee_cents) || 0,
             bridgeCount: Number(options.bridge_count) || 0,
 
+            /**
+             * Beban operasional sesi ini (Fase 9) — SELURUHNYA dari peladen:
+             * jumlah voucher `operational_expenses` yang belum terserap. Tidak
+             * ada isian operator lagi (`coord_fee` dihapus), sehingga angka ini
+             * tidak dapat dinaikkan dari peramban untuk menahan uang di laci.
+             */
+            opexFeeCents: Number(options.opex_fee_cents) || 0,
+
+            /**
+             * Hak mitra lapangan (Fase 10) — SELURUHNYA dari peladen: daftar
+             * tarif (perseratus persen) petugas aktif + total akrual bonus yang
+             * belum terserap. Cermin `OfficerService::previewCuts()`; peladen
+             * menghitung ulang saat POST, jadi angka ini hanya pratinjau.
+             */
+            officerPcts: Array.isArray(options.officer_pcts) ? options.officer_pcts.map(Number) : [],
+            officerBonusCents: Number(options.officer_bonus_cents) || 0,
+
             soldGrams: '',
             densityPercent: '',
             shopPrice: '',
-            coordFee: '',
             kasInput: '',
             brankasInput: '',
 
@@ -901,7 +948,6 @@
                 this.soldGrams = formFieldValue(this, 'sold_grams');
                 this.densityPercent = formFieldValue(this, 'density_pct');
                 this.shopPrice = formFieldValue(this, 'shop_price_per_g');
-                this.coordFee = formFieldValue(this, 'coord_fee');
                 this.kasInput = formFieldValue(this, 'kas_split');
                 this.brankasInput = formFieldValue(this, 'brankas_split');
 
@@ -918,10 +964,6 @@
 
             get shopPriceCents() {
                 return AurumInput.priceCents(this.shopPrice);
-            },
-
-            get coordFeeCents() {
-                return AurumInput.moneyCents(this.coordFee);
             },
 
             /** Cermin `SettlementService::quote()` — server tetap menghitung. */
@@ -946,8 +988,50 @@
                 return this.revenueCents - this.holdingCostCents;
             },
 
+            /**
+             * Basis potongan mitra lapangan = laba kotor yang benar-benar ada
+             * (D-2: hari minus → 0, potongan tidak pernah melebihi laba kotor).
+             */
+            get grossPositiveCents() {
+                return Math.max(0, this.grossCents);
+            },
+
+            /**
+             * Σ potongan mitra lapangan — pembulatan setengah sen ke atas per
+             * petugas, lalu dibatasi laba kotor. Sama dengan
+             * `OfficerService::previewCuts()` di peladen.
+             */
+            get officerCutCents() {
+                var basis = this.grossPositiveCents;
+
+                if (basis <= 0 || this.officerPcts.length === 0) {
+                    return 0;
+                }
+
+                var total = 0;
+
+                for (var index = 0; index < this.officerPcts.length; index++) {
+                    var pct = Number(this.officerPcts[index]) || 0;
+
+                    if (pct > 0) {
+                        total += Math.floor((basis * pct + 5000) / 10000);
+                    }
+                }
+
+                return Math.min(total, basis);
+            },
+
+            get officerCount() {
+                return this.officerPcts.length;
+            },
+
+            /**
+             * Laba setelah beban operasional, bonus akrual, dan potongan petugas.
+             * Keduanya mengurangi laba TEPAT SEKALI: potongan pada akrual sesi
+             * ini, bonus saat diserap (tidak pernah sebagai voucher OPEX).
+             */
             get afterFeeCents() {
-                return this.grossCents - this.coordFeeCents;
+                return this.grossCents - this.opexFeeCents - this.officerBonusCents - this.officerCutCents;
             },
 
             /** Pemulihan defisit: min(active, max(0, laba kotor - aparat)). */
@@ -977,9 +1061,18 @@
                 return net <= 0 ? 0 : net - this.operatorCents;
             },
 
-            /** Kas fisik yang benar-benar diterima: pendapatan - beban aparat. */
+            /**
+             * Kas fisik yang benar-benar diterima dari toko = PENDAPATAN PENUH.
+             *
+             * Fase 9: beban operasional sudah keluar tunai dari laci lebih
+             * dahulu (`ExpenseService::pay()`), sehingga laci menerima
+             * penggantiannya lewat alokasi `kas`. Beban hanya mengurangi laba
+             * (`afterFeeCents`), bukan kas yang dialokasikan — mengurangi
+             * keduanya membuat buku lebih rendah daripada uang fisik tepat
+             * sebesar beban (audit § 5.5 skenario B).
+             */
             get totalCashCents() {
-                return this.revenueCents - this.coordFeeCents;
+                return this.revenueCents;
             },
 
             get kasCents() {
@@ -1017,7 +1110,8 @@
                     && this.shopPriceCents > 0
                     && density > 0
                     && density <= 10000
-                    && this.coordFeeCents >= 0
+                    && this.opexFeeCents <= this.revenueCents
+                    && this.opexFeeCents + this.officerBonusCents + this.officerCutCents <= this.revenueCents
                     && this.soldMilligrams <= this.holdingMg
                     && this.totalCashCents >= 0;
             },
@@ -1038,8 +1132,16 @@
                 return AurumFormat.rupiah(this.grossCents);
             },
 
-            get coordFeeLabel() {
-                return '- ' + AurumFormat.rupiah(this.coordFeeCents);
+            get opexFeeLabel() {
+                return '- ' + AurumFormat.rupiah(this.opexFeeCents);
+            },
+
+            get officerBonusLabel() {
+                return '- ' + AurumFormat.rupiah(this.officerBonusCents);
+            },
+
+            get officerCutLabel() {
+                return '- ' + AurumFormat.rupiah(this.officerCutCents);
             },
 
             get deficitLabel() {
@@ -1168,10 +1270,28 @@
                 this.brankasInput = this.centsToInput(this.suggestedBrankasCents);
             },
 
+            /**
+             * Sen -> teks isian alokasi.
+             *
+             * Sejak Fase 10 nilai saran dapat memuat **sen** (potongan mitra
+             * lapangan 2,5 % menghasilkan Rp 59.662,50). Sebelumnya fungsi ini
+             * membuang sen (`Math.floor(value / 100)`), sehingga kedua isian
+             * berjumlah Rp 1 lebih kecil daripada kas yang diterima: tombol
+             * kirim terkunci dan peladen menjawab "alokasi harus berjumlah
+             * persis". Sekarang sisa sen ikut ditulis sebagai koma desimal —
+             * bentuk yang diterima `SettlementService::parseMoneyInput()` dan
+             * `AurumInput.moneyCents()`.
+             */
             centsToInput: function (cents) {
-                var value = Math.max(0, Number(cents) || 0);
+                var value = Math.max(0, Math.round(Number(cents) || 0));
+                var whole = String(Math.floor(value / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                var rest = value % 100;
 
-                return String(Math.floor(value / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                if (rest === 0) {
+                    return whole;
+                }
+
+                return whole + ',' + (rest < 10 ? '0' + rest : String(rest));
             },
 
             /**

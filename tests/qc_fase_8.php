@@ -1610,9 +1610,9 @@ $agentsSource = (string) file_get_contents(BASE_PATH . '/AGENTS.md');
 
 Qc::ok(
     'I.5',
-    'CACHE_NAME naik ke aurumflow-shell-v3 dan AGENTS.md menyebut versi yang sama',
-    str_contains($swSource, "var CACHE_NAME = 'aurumflow-shell-v3';")
-        && str_contains($agentsSource, 'aurumflow-shell-v3')
+    'CACHE_NAME naik ke aurumflow-shell-v5 dan AGENTS.md menyebut versi yang sama',
+    str_contains($swSource, "var CACHE_NAME = 'aurumflow-shell-v5';")
+        && str_contains($agentsSource, 'aurumflow-shell-v5')
         && str_contains($swSource, "'./assets/js/app.js'")
         && str_contains($swSource, "'./assets/css/app.min.css'"),
     'satu pemilik versi shell'
@@ -1703,7 +1703,7 @@ Qc::ok(
 
 Qc::ok(
     'J.2',
-    'AGENTS.md: dua permukaan izin kasir, 13 tabel, dan posisi miner_loans pada urutan kunci',
+    'AGENTS.md: dua permukaan izin kasir, peta tabel (11–13 kasbon) dan posisi miner_loans pada urutan kunci',
     str_contains($agentsSource, 'berjumlah **dua**')
         && str_contains($agentsSource, '`miner_loans` (Fase 8')
         && str_contains($agentsSource, 'tabel **11–13**')

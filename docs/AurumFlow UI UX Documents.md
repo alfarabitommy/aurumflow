@@ -142,6 +142,12 @@ Layar kerja utama operator di samping timbangan digital.
 > di markup. Subjudul header tetap "AURUMFLOW · Meja Hulu" agar kasir tidak perlu menyesuaikan
 > kebiasaan kerja.
 >
+> **Catatan Fase 9 — kartu "Beban Operasional".** Di bawah kartu *Dana Talangan* ada kartu
+> **Beban Operasional** dengan tombol **`− Catat Beban Kas`**. Tombol itu membuka **modal**
+> (Layar B3) — bukan halaman baru — karena kasir sedang memegang uang tunai dan tidak boleh
+> berpindah layar. Kartu ini tampil untuk **operator maupun kasir**; tidak memuat data pemilik
+> (Brankas, laba, pool) sehingga isolasi peran tetap utuh.
+>
 > **Catatan Fase 8 — satu kerangka 2-tier.** `/dashboard` kini memakai layout yang sama
 > (`layouts/operator.php`), sehingga subjudul baris atas bersifat adaptif: operator melihat judul
 > halaman (`Dashboard`, `Meja Kasir Hulu`, `Rekonsiliasi & Settlement`, `Kelola Modal &
@@ -207,6 +213,57 @@ Dipakai ketika kas meja habis pada malam hari: pengelola meminjam kas tunai dari
 
 ---
 
+### Layar B3: Modal "Catat Beban Kas" (Beban Operasional Non-Emas — Fase 9)
+Dipakai saat uang keluar dari laci untuk **beban non-emas**: koordinasi lapangan, pengamanan
+wilayah, konsumsi/gas, dan lain-lain. Berbeda dari dana talangan (kas **masuk**), modal ini
+mencatat kas **keluar** dan langsung mengurangi `Kas Meja Bakar`.
+
+```
+┌─────────────────────────────────────────┐
+│ ≡ AURUMFLOW MEJA HULU        Kas: 18,5M │
+├─────────────────────────────────────────┤
+│ ┌─────────────────────────────────────┐ │
+│ │ Catat Beban Kas              [Tutup]│ │
+│ │ Kas keluar tunai dari laci untuk    │ │
+│ │ beban operasional non-emas.         │ │
+│ │                                     │ │
+│ │ Kategori Beban                      │ │
+│ │ [ Koordinasi Lapangan  ▾ ]          │ │  <- select: coordination/
+│ │                                     │ │     security/consumable/other
+│ │ Nama Penerima                       │ │
+│ │ [ mis. Pak RT / Petugas Jaga      ] │ │  <- wajib
+│ │                                     │ │
+│ │ Nominal Tunai (Rp)                  │ │
+│ │ [ mis. 200.000                    ] │ │  <- wajib, > 0
+│ │                                     │ │
+│ │ Catatan (opsional)                  │ │
+│ │ [ mis. koordinasi malam, 2 petugas] │ │
+│ │                                     │ │
+│ │ ⓘ Beban ini mengurangi saldo kas    │ │
+│ │   meja DAN laba kotor tutup buku    │ │
+│ │   berikutnya. Mitra hanya menerima  │ │
+│ │   bagian laba setelah beban.        │ │
+│ │                                     │ │
+│ │ [ Batal ]  [ Catat Beban & Kurangi ]│ │
+│ │            [ Kas                   ]│ │
+│ └─────────────────────────────────────┘ │
+└─────────────────────────────────────────┘
+```
+
+* **Satu penyerahan = satu voucher.** Peladen menulis tiga hal dalam **satu transaksi**
+  (`ExpenseService::pay()`): `cash_mutations` (`out`), saldo `Kas Meja Bakar` turun, dan baris
+  `operational_expenses`. Tanggal bisnis, pos kas, dan pencatat ditentukan peladen.
+* **Modal memakai komponen yang sudah ada** (`tellerForm`) dan tetap `x-cloak` — bila Alpine
+  gagal dimuat, modal tidak menyisakan kotak hantu.
+* **Kontrol form tidak pernah `:disabled`.** Isian memakai `:readonly="opexSubmitting"`; `select`
+  kategori dibiarkan tanpa `disabled` agar kategorinya tetap terkirim. `:disabled` hanya untuk
+  `<button>`.
+* **Nominal bukan angka turunan.** Form hanya mengirim kategori, penerima, nominal, dan catatan;
+  validasi (nominal > 0, penerima wajib, kategori ∈ enum, saldo cukup) milik peladen → `422`
+  tanpa tulisan bila gagal.
+
+---
+
 ### Layar C: Rekonsiliasi & Settlement Hilir (Morning Settlement)
 Layar tutup buku setelah penjualan emas padu ke toko emas langganan selesai.
 
@@ -241,8 +298,13 @@ Layar tutup buku setelah penjualan emas padu ke toko emas langganan selesai.
 │ │ Preview: nota-180926.jpg (180 KB)   │ │
 │ └─────────────────────────────────────┘ │
 │                                         │
-│ Potongan Koordinasi / Aparat Hari Ini   │
-│ [ Rp 200.000                          ] │
+│BEBAN OPERASIONAL TERSERAP (OTOMATIS)    │  <- Fase 9: read-only, bukan isian
+│Pak RT 04 · Koordinasi Lapangan          │
+│   − Rp 150.000                          │
+│Warung Bu Sri · Konsumsi / Gas           │
+│   − Rp  50.000                          │
+│Total beban sesi ini: − Rp 200.000       │
+│(alokasi kas memakai pendapatan PENUH)   │
 │                                         │
 │ ── KALKULASI HASIL PUTARAN ──────────── │
 │ Kas Masuk Toko    : Rp 50.373.600       │
@@ -265,13 +327,25 @@ Layar tutup buku setelah penjualan emas padu ke toko emas langganan selesai.
 ```
 
 > **Catatan implementasi (perbaikan UX pascarilis).** Angka pada wireframe di atas adalah
-> **ilustrasi**, bukan nilai awal form: `24.160 gr`, `93.50 %`, `Rp 2.085.000`, dan
-> `Rp 200.000` tidak pernah dijadikan nilai bawaan di sisi peramban. Yang di-pre-fill peladen
-> hanya total berat emas `holding` (dari `hulu_transactions`) dan `coord_fee` memakai asumsi
-> PRD (`SettlementController::COORD_FEE_FIELD`); **kadar timbang air & harga jual riil toko
-> wajib diisi operator** setiap hari. Setiap contoh nilai pada form ditulis dengan awalan
-> `mis.` agar tidak terbaca sebagai data yang sudah terisi. Rincian, bukti, dan assertion
-> penjaganya ada di `plan/Plan_Fix_Settlement_UI.md`.
+> **ilustrasi**, bukan nilai awal form: `24.160 gr`, `93.50 %`, dan `Rp 2.085.000` tidak pernah
+> dijadikan nilai bawaan di sisi peramban. Yang di-pre-fill peladen hanya total berat emas
+> `holding` (dari `hulu_transactions`); **kadar timbang air & harga jual riil toko wajib diisi
+> operator** setiap hari. Setiap contoh nilai pada form ditulis dengan awalan `mis.` agar tidak
+> terbaca sebagai data yang sudah terisi. Rincian, bukti, dan assertion penjaganya ada di
+> `plan/Plan_Fix_Settlement_UI.md`.
+
+> **Catatan implementasi (Fase 9 — beban otomatis, isian dihapus).** Baris
+> *"Potongan Koordinasi / Aparat Hari Ini"* **tidak ada lagi** di form: `coord_fee` dan
+> `SettlementController::COORD_FEE_FIELD` sudah dihapus dari kode. Nilainya diturunkan peladen
+> dari voucher `operational_expenses` yang belum terserap (`settlement_id IS NULL`) dan
+> ditampilkan **read-only** beserta daftar penerimanya. Konsekuensi angka: alokasi kas memakai
+> **pendapatan toko penuh** (bukan `pendapatan − beban`), karena uang beban sudah keluar dari laci
+> lebih dahulu — pada skenario QC 3, saran `Kas Meja Bakar` menjadi **Rp 35.357.500**
+> (modal Rp 35.157.500 + beban Rp 200.000) dan `Brankas Utama` tetap **Rp 2.186.500**; laba
+> bersih, hak pengelola, dan pool investor **tidak berubah**. Alasan aritmetika (mengapa isian
+> manual + baris kas akan menggandakan beban) ada di
+> `audit/Audit_Biaya_Koordinasi_AurumFlow.md` § 5.5, ringkasannya di
+> `plan/Summary_Fase_9_OPEX_AurumFlow.md` § 4.
 
 > **Catatan implementasi (Fase 6 — baris dana talangan).** Dua baris pada ringkasan bagi hasil —
 > **"Fee talangan (n)"** dan **"Hak pengelola bersih"** — tampil selama sesi itu punya talangan
@@ -744,3 +818,58 @@ titik + koma desimal — bentuk yang diterima `SettlementService::parseMoneyInpu
   `tanggalId()`.
 * Permukaan kasbon **tidak** memuat `Brankas`, laba bersih, `pool mitra`, omzet, maupun tautan ke
   Rekonsiliasi/Kelola Modal/Kelola Kasir/Dashboard.
+
+---
+
+## 9. Buku Hak Mitra Lapangan — Layar G & Layar H (Fase 10)
+
+### 9.1 Layar G: Kelola Mitra Lapangan (`/operator/petugas`, khusus operator)
+
+Satu halaman, empat blok vertikal (mobile-first; meja ≥ 1024 px dua kolom):
+
+| Blok | Isi |
+| :--- | :--- |
+| **Ringkasan** | jumlah petugas aktif/total, **Σ Saldo Hak** (Rp), Σ tarif vs batas sistem, total bonus yang belum diserap |
+| **Tambah petugas** | nama, nomor telepon, PIN 6 digit + konfirmasi, **potongan (%)**; penjelasan singkat bahwa persentase dihitung dari laba kotor dan nol pada hari minus |
+| **Daftar petugas** | nama · telepon · tarif · **saldo hak** · status · aksi: *Ubah Tarif*, *Aktif/Nonaktif*, *Reset PIN*, dan `<details>` **Bonus & Pencairan Hak** (dua form berdampingan) |
+| **Buku hak terbaru** | 20 entri terakhir lintas petugas: nama · jenis (`Potongan Harian` / `Bonus` / `Pencairan`) · nominal bertanda · saldo setelah |
+
+Aturan form (tidak berubah dari Fase 2–9):
+
+* Nilai awal dirender **peladen** (`value="…"`), placeholder contoh selalu berawalan `mis. `.
+* Kontrol form **tidak pernah** `:disabled` — selama pengiriman `:readonly="submitting"` + kelas
+  redup; `:disabled` hanya untuk `<button>`.
+* Form bonus memuat peringatan eksplisit: *"bonus menambah saldo hak dan mengurangi laba bersih
+  pada tutup buku berikutnya"*; form pencairan menampilkan saldo hak tersedia + saldo pos terpilih
+  (pemilih pos = **Kas Meja Bakar / Brankas Utama**, nilai token, bukan UUID).
+* Setiap mutasi memakai `_once` + PRG (satu halaman = satu token aktif).
+* Seluruh output `Security::e()`; angka lewat `Formatter::rupiah()`/`persen()`/`tanggalId()`.
+
+### 9.2 Layar C (Rekonsiliasi) — kartu tambahan read-only
+
+* **"Potongan & Bonus Mitra Lapangan (otomatis)"**: daftar petugas + tarif, daftar bonus akrual
+  yang akan diserap beserta totalnya, dan penjelasan bahwa uangnya tetap di laci sampai dicairkan.
+* Dua baris baru pada pratinjau kalkulasi: **Bonus akrual mitra lapangan** dan **Potongan mitra
+  lapangan (n)** — keduanya dikendalikan state `settlementForm` (nilai dari peladen), bukan isian.
+* **Tanpa isian baru** di form rekonsiliasi (aturan anti-fiktif Fase 9 diperluas ke hak petugas).
+* `CACHE_NAME` naik ke **`aurumflow-shell-v5`** karena `app.js` berubah.
+* **Saran alokasi mempertahankan sen.** Sejak potongan mitra lapangan dapat berisi sen
+  (2,5 % → Rp 59.662,50), `centsToInput()` menulis sisa sen sebagai koma desimal
+  (`35.567.162,50`) alih-alih membuangnya. Tanpa itu kedua isian berjumlah Rp 1 lebih kecil
+  daripada kas yang diterima: tombol kirim terkunci (`splitBalanced` palsu) dan peladen menolak
+  dengan "alokasi harus berjumlah persis".
+
+### 9.3 Layar H: Dasbor Blind Mitra Lapangan (`/officer/dashboard`, `/officer/riwayat`)
+
+| Bagian | Isi | Larangan |
+| :--- | :--- | :--- |
+| Header | nama petugas, label peran "Mitra Lapangan (Petugas)", tombol keluar | — |
+| Kartu utama | **Saldo Hak** (Rp) + waktu pembaruan + penjelasan bahwa pencairan dilakukan pengelola | saldo kas, emas, omzet, laba |
+| Ringkasan bulan | Σ potongan, Σ bonus, Σ pencairan bulan berjalan | **tarif** (`cut_pct`), **basis** (`base_amount`) |
+| Riwayat | tanggal · jenis · nominal bertanda · saldo setelah · catatan operator | pos kas, id mutasi, sesi tutup buku |
+
+* Dua tab saja (Dasbor, Riwayat); **tidak ada** form/POST di portal ini.
+* Nomor telepon selalu tersamar (`08••••••••90`).
+* Layout `layouts/officer.php` **tidak** memuat tautan ke permukaan operator/investor.
+* Papan angka PIN `/officer/login` memakai komponen `investorLogin` yang **sudah terdaftar**
+  (bukan `Alpine.data()` baru) dan `x-cloak`, sehingga tetap benar bila aset ter-cache.

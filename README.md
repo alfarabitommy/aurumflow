@@ -154,7 +154,7 @@ aurumflow/
 │   │   └── errors/           # 404.php, 500.php, error.php
 │   └── routes.php            # route table (data saja)
 ├── database/
-│   ├── schema.sql            # DDL ERD (13 tabel)
+│   ├── schema.sql            # DDL ERD (14 tabel)
 │   ├── seed.sql              # system_settings + cash_registers
 │   ├── install.php           # runner instalasi (WAJIB dihapus setelah dipakai)
 │   └── migrate.php           # migrasi aditif lapangan (Fase 7–8; idempoten)
@@ -263,7 +263,7 @@ Atau lewat browser (hosting tanpa CLI):
 https://domain-anda.com/database/install.php?token=<INSTALL_TOKEN>
 ```
 
-Instalasi akan: menerapkan `schema.sql` (13 tabel ERD), `seed.sql`
+Instalasi akan: menerapkan `schema.sql` (14 tabel ERD), `seed.sql`
 (6 `system_settings` + 2 `cash_registers`), membuat akun operator, dan menulis
 marker `storage/installed.lock` — penyiapan akun + verifikasi pos kas
 dibungkus dalam **satu transaksi** PDO.
@@ -288,6 +288,8 @@ tidak pernah ditimpa. Sejak Fase 8 skrip ini menjalankan dua migrasi sekaligus:
 | :--- | :--- | :--- |
 | **M1** | nilai ENUM `'cashier'` di ujung `users.role` | `User::ensureRoleEnum()` |
 | **M2** | tiga tabel kasbon (`miners`, `miner_loans`, `miner_loan_ledger`) + kunci `system_settings.daily_loan_limit` | `Miner::ensureSchema()` + `SystemSetting::ensure()` |
+| **M3** | tabel beban operasional non-emas (`operational_expenses`) — Fase 9 | `OperationalExpense::ensureSchema()` |
+| **M4** | nilai ENUM `'officer'` + dua tabel buku hak mitra lapangan (`officers`, `officer_ledger_entries`) + kunci `officer_cut_total_cap_pct` — Fase 10 | `User::ensureRoleEnum()` + `Officer::ensureSchema()` + `SystemSetting::ensure()` |
 
 ### 4.5 TINDAK LANJUT WAJIB setelah instalasi
 
@@ -299,6 +301,8 @@ tidak pernah ditimpa. Sejak Fase 8 skrip ini menjalankan dua migrasi sekaligus:
    (aditif, idempoten) lalu buat akun kasir dari **Kelola Kasir** (`/operator/kasir`).
 6. Bila basis data dipasang **sebelum** Fase 8, jalankan `php database/migrate.php`
    sekali lagi (migrasi **M2**) agar tabel buku kasbon dan batas harian tersedia.
+7. Bila basis data dipasang **sebelum** Fase 9, jalankan `php database/migrate.php`
+   sekali lagi (migrasi **M3**) agar tabel `operational_expenses` tersedia.
 
 ---
 
@@ -322,6 +326,9 @@ membuat skrip `exit 1` (sebelumnya status pipeline diambil dari `tee` sehingga
 kegagalan tersamarkan). Keluaran lengkapnya ditulis ke
 `storage/logs/qc-fase7.log`.
 
+Baseline terkini: **16 suite / 989 assertion / 0 gagal** (exit 0), tanpa
+`storage/logs/php-*.log`.
+
 Semua suite juga dapat dijalankan sendiri-sendiri:
 
 ```bash
@@ -335,7 +342,10 @@ php tests/qc_fase_3.php
 php tests/qc_fase_4.php
 php tests/qc_fase_5.php
 php tests/qc_fase_6.php
+php tests/qc_fase_7.php
 php tests/qc_fase_8.php
+php tests/qc_fase_9.php
+php tests/qc_fase_10.php
 php tests/qc_sql_injection.php
 php tests/qc_routing.php
 ```
@@ -345,7 +355,7 @@ php tests/qc_routing.php
 | `qc_pdo` | 20 | Koneksi, charset, timezone, exception, singleton, presisi DECIMAL, transaksi commit/rollback |
 | `qc_formatter` | 43 | Format Rupiah & gramatur (kesamaan string persis), round-trip, locale, tanggal operasi |
 | `qc_security` | 32 | XSS escaping, password hashing, CSRF, session, `uuidV4()`, sumber acak |
-| `qc_seed` | 48 | Idempotensi DDL/seed, 13 tabel ERD, konvensi DECIMAL, FK, ENUM, semantik kunci kasbon, guard installer |
+| `qc_seed` | 48 | Idempotensi DDL/seed, 14 tabel ERD, konvensi DECIMAL, FK, ENUM, semantik kunci kasbon, guard installer |
 | `qc_roadmap_protocol_1` | 6 | **Protokol QC Manual 1** dari dokumen Roadmap (5 baris, 1:1) |
 | `qc_fase_2` | 66 | **Protokol QC Manual 2** + kalkulasi uang, parsing input, atomisitas, saldo kurang, anti double-submit, guard peran, pemindaian statis, kontrak form kasir (`type`/`inputmode`/`x-model.fill`, `init()` tanpa `$refs`, kontrol tidak `:disabled`) |
 | `qc_fase_3` | 98 | **Protokol QC Manual 3** (3.1 normal, 3.2 hari minus, 3.3 pemulihan defisit) + Smart Auto-Split, mesin defisit, unggah nota (gambar tiruan), atomisitas & berkas yatim, pemindaian statis, kontrak form rekonsiliasi (pre-fill, placeholder contoh, paritas kunci lintas lapis, `init()` tanpa `$refs`, kontrol tidak `:disabled`) |
@@ -353,10 +363,12 @@ php tests/qc_routing.php
 | `qc_fase_5` | 130 | **Protokol QC Manual 5** (undangan sekali pakai + audit jejak hukum, kebijakan PIN & pepper gagal-tertutup, pembatas percobaan, isolasi blind dengan kanari, penarikan mandiri H-7, ekspor cetak/CSV, PWA, kontrak form & gating sadar peran, bootstrap Alpine pada setiap layout ber-Alpine) |
 | `qc_fase_6` | 105 | **Protokol QC Manual 6A** (dana talangan: fee nominal/persen dihitung peladen, penerimaan kas tiga tulisan + atomisitas & `_once`, auto-pay tutup buku dengan satu mutasi `out` per talangan, **isolasi pool mitra dibuktikan diferensial** (dengan vs tanpa talangan), hari minus & `fee_uncovered`, FIFO lintas siklus, penjagaan saldo, tabel ke-10 tanpa ALTER, **regresi UI**: baris fee talangan tidak pernah bergantung pada laba) |
 | `qc_fase_7` | 78 | **Protokol QC Manual 7** (peran kasir: ENUM aditif + migrasi idempoten, provisioning "Kelola Kasir" dengan PIN ber-pepper, pintu PIN `/cashier/login`, **matriks gating *allow-list*** GET+POST dengan nol tulisan & `_once` utuh, isolasi permukaan kasir lewat kanari & daftar terlarang, kontrak statis guard-first) |
-| `qc_fase_8` | 66 | **Protokol QC Manual 8** (buku kasbon petani: tiga tulisan atomik pencairan, **dua lapis validasi** batas harian + saldo fisik laci dengan nol tulisan, angsuran tunai/potong nota & FIFO satu mutasi kas, pelunasan, `_once`, RBAC **dua permukaan izin**, isolasi permukaan kasir, kontrak statis urutan kunci, datalist & tombol cepat, `CACHE_NAME` v3, **nol kompilasi CSS**) |
+| `qc_fase_8` | 66 | **Protokol QC Manual 8** (buku kasbon petani: tiga tulisan atomik pencairan, **dua lapis validasi** batas harian + saldo fisik laci dengan nol tulisan, angsuran tunai/potong nota & FIFO satu mutasi kas, pelunasan, `_once`, RBAC **dua permukaan izin**, isolasi permukaan kasir, kontrak statis urutan kunci, datalist & tombol cepat, `CACHE_NAME` v3 → v4, **nol kompilasi CSS**) |
+| `qc_fase_9` | 47 | **Protokol QC Manual 9** (OPEX: tiga tulisan atomik `ExpenseService::pay()`, penolakan input & saldo kurang dengan **nol tulisan**, operator **dan** kasir boleh mencatat lewat `/operator/opex/pay`, mitra & anonim ditolak, CSRF + `_once`, penyerapan voucher saat tutup buku, **bukti perbaikan rumus** `kas + brankas = pendapatan`, penolakan beban > pendapatan, skema tabel ke-14 + FK RESTRICT/SET NULL, pemindaian statis, idempotensi fixture) |
+| `qc_fase_10` | 89 | **Protokol QC Manual 10** (buku hak mitra lapangan: skema tabel 15–16 + ENUM `officer` + nol ALTER, akun & kebijakan PIN ber-pepper, **aritmetika potongan murni** (pembulatan, hari minus, cap, monotonisitas), akrual potongan & penyerapan bonus **tepat sekali** tanpa voucher OPEX, pencairan empat tulisan atomik dari dua pos kas, RBAC guard-first (petugas/kasir/mitra/anonim), **isolasi blind** lewat pemindaian statis + HTML nyata, aritmetika kas buku-vs-fisik, idempotensi fixture) |
 | `qc_sql_injection` | 15 | 8 payload injeksi (model + HTTP), integritas data, pemindaian statis |
 | `qc_routing` | 31 | Routing, CSRF, login/logout, cookie, header, proteksi file sensitif, aset |
-| **Total** | **853** | **0 FAIL** |
+| **Total** | **989** | **0 FAIL** |
 
 Exit code `0` = seluruh assertion lulus, `1` = ada yang gagal.
 
@@ -371,6 +383,7 @@ node tests/manual/js_capital_simulator_check.js # cermin waterfall JS vs peladen
 node tests/manual/js_investor_check.js          # 45 assertion: papan angka PIN, dasbor mitra, bootstrap Alpine layout, salin tautan, scope SW (Fase 5)
 node tests/manual/js_bridge_fee_check.js        # 65 assertion: cermin fee talangan & klamp hak pengelola (Fase 6)
 node tests/manual/js_kasbon_check.js            # 24 assertion: cermin tombol cepat 20 %/30 %/Lunas & init() buku kasbon (Fase 8)
+node tests/manual/js_settlement_officer_check.js # 46 assertion: cermin potongan & bonus mitra lapangan (Fase 10)
 ```
 
 `qc_roadmap_protocol_1`, `qc_fase_2`, dan `qc_fase_3` mencetak tabel yang
@@ -503,10 +516,12 @@ dan konvensi tampilan angka.
 
 ```
 Kas Meja Bakar (cash_registers)
-   └─ hulu_transactions (status holding)      ← Fase 2: meja kasir hulu
-         └─ daily_settlements (tutup buku harian)   ← Fase 3: rekonsiliasi toko
-               ├─ profit_distributions (pro-rata ke capital_wallets)  ← Fase 4
-               └─ withdrawal_requests (penarikan H-7)                 ← Fase 4
+   ├─ hulu_transactions (status holding)      ← Fase 2: meja kasir hulu
+   │     └─ daily_settlements (tutup buku harian)   ← Fase 3: rekonsiliasi toko
+   │           ├─ profit_distributions (pro-rata ke capital_wallets)  ← Fase 4
+   │           └─ withdrawal_requests (penarikan H-7)                 ← Fase 4
+   └─ operational_expenses (voucher beban non-emas)   ← Fase 9: modal "Catat Beban Kas"
+         └─ daily_settlements (voucher diserap → pengurang laba kotor)
 ```
 
 Siklus kas lengkap dalam satu hari operasional:
@@ -516,7 +531,8 @@ Siklus kas lengkap dalam satu hari operasional:
 | Kapan saja | `/operator/capital` (Fase 4) | setoran: `capital_wallets.balance_capital` + `cash_registers` (Brankas +) + `cash_mutations` (`in`) — Pindah Kas: `cash_registers` ×2 + `cash_mutations` (`out`,`in`) — pencairan: `capital_wallets` (dividen/modal −) + `cash_registers` (Brankas −) + `cash_mutations` (`out`) + `withdrawal_requests.status` |
 | Sore–malam | `/operator/teller` (Fase 2) | `hulu_transactions` (`holding`) + `cash_registers` (Kas Meja −) + `cash_mutations` (`out`) |
 | Sore–malam (kas habis) | `/operator/teller` → **Terima Dana Talangan** (Fase 6) | `bridge_loans` (`active`) + `cash_registers` (Kas Meja + pokok) + `cash_mutations` (`in`) |
-| Pagi–siang | `/operator/settlement` (Fase 3 + 4 + 6) | `daily_settlements` + `hulu_transactions` (`holding`→`settled` + `settlement_id`) + `cash_registers` (Kas Meja + / Brankas +) + `cash_mutations` (`in` ×2) + `system_settings.active_carryover_deficit` + `profit_distributions` + `capital_wallets.balance_profit` + `bridge_loans` (`settled` + `fee_absorbed`/`fee_uncovered`) + `cash_registers` (Kas Meja − pokok + fee) + `cash_mutations` (`out` per talangan) |
+| Kapan saja (beban non-emas) | `/operator/teller` → **− Catat Beban Kas** (Fase 9) | `cash_mutations` (`out`) + `cash_registers` (Kas Meja −) + `operational_expenses` (`settlement_id` NULL) |
+| Pagi–siang | `/operator/settlement` (Fase 3 + 4 + 6 + 9) | `daily_settlements` (termasuk `daily_coordination_fee`/`consumable_opex` dari voucher) + `hulu_transactions` (`holding`→`settled` + `settlement_id`) + `cash_registers` (Kas Meja + / Brankas +) + `cash_mutations` (`in` ×2) + `operational_expenses` (`settlement_id` diisi) + `system_settings.active_carryover_deficit` + `profit_distributions` + `capital_wallets.balance_profit` + `bridge_loans` (`settled` + `fee_absorbed`/`fee_uncovered`) + `cash_registers` (Kas Meja − pokok + fee) + `cash_mutations` (`out` per talangan) |
 
 > Sejak Fase 4, tutup buku menyentuh **enam kelompok tulisan** dalam satu
 > transaksi: lima kelompok Fase 3 ditambah distribusi pool 20 % oleh
@@ -527,6 +543,13 @@ Siklus kas lengkap dalam satu hari operasional:
 > (`BridgeLoanService::settleLoans()`) — baris `bridge_loans`, saldo Kas Meja
 > Bakar, dan satu `cash_mutations` (`out`) per talangan, semuanya di dalam
 > transaksi yang sama.
+>
+> **Fase 9 menambah kelompok kedelapan**: penyerapan voucher beban operasional
+> (`OperationalExpense::absorb()`) — `UPDATE operational_expenses SET
+> settlement_id` untuk setiap voucher yang dikunci `FOR UPDATE`, plus pengisian
+> `daily_settlements.daily_coordination_fee`/`consumable_opex` dari jumlahnya.
+> Beban **tidak** menulis baris kas baru di sini (kasnya sudah keluar saat
+> voucher dicatat di meja kasir).
 
 Setiap pembayaran tunai di meja hulu menulis **tiga hal dalam satu transaksi
 PDO** (`TellerService::payCash()`):
@@ -570,13 +593,21 @@ dengan pesan "transaksi ganda diabaikan". CSRF tetap diperiksa dua lapis
 
 ### 7.9 Smart Auto-Split & mesin defisit (Fase 3)
 
-Kas fisik yang diterima hari itu adalah `pendapatan toko − beban aparat`.
+Kas fisik yang diterima dari toko adalah **`pendapatan toko` (penuh)**.
 Sistem **menyarankan** alokasinya:
 
 | Pos | Saran bawaan |
 |---|---|
-| `Kas Meja Bakar` | `kas diterima − laba bersih` (praktis: modal belanja hulu kembali) |
+| `Kas Meja Bakar` | `pendapatan − laba bersih` (praktis: modal belanja hulu **+ beban operasional yang sudah dibayar dari laci**) |
 | `Brankas Utama` | `max(0, laba bersih)` |
+
+> **Sejak Fase 9 beban operasional TIDAK mengurangi kas yang dialokasikan.** Beban dibayar
+> tunai dari laci lebih dahulu (`ExpenseService::pay()`), jadi laci harus menerima
+> penggantiannya. Beban tetap mengurangi laba (`laba bersih` di bawah), tetapi bila ia juga
+> mengurangi kas yang dialokasikan, saldo buku menjadi lebih rendah daripada uang fisik tepat
+> sebesar beban pada **setiap** sesi. Bukti aritmetika: `audit/Audit_Biaya_Koordinasi_AurumFlow.md`
+> § 5.5. Karena itu isian "beban aparat" dihapus dari layar rekonsiliasi — angkanya diturunkan
+> peladen dari voucher OPEX (lihat § 7.16).
 
 Kedua isian **milik operator** (manual override) dan peladen hanya
 menerimanya bila jumlahnya **persis sama** dengan kas yang diterima; kalau
@@ -587,7 +618,7 @@ JavaScript.
 Rumus defisit (PRD §4.2):
 
 ```
-X      = laba kotor − beban aparat
+X      = laba kotor − beban operasional
 used   = min(defisit_berjalan, max(0, X))
 net    = X − used                     → bagi hasil 80 : 20 hanya bila net > 0
 defisit_hari_ini = max(0, −net)       → daily_settlements.carryover_deficit
@@ -688,9 +719,9 @@ berdaftar-putih; navigasi selalu jaringan, HTML/CSV tidak pernah di-cache), `off
 > dilayani **cache-first**, sehingga tanpa kenaikan versi shell peramban operator tetap menjalankan
 > JS/CSS lama bersama view baru — komponen Alpine kehilangan variabel baru (mis. `bridgeHasActive`)
 > dan elemen `x-cloak x-show="…"` tidak pernah muncul. Versi shell saat ini
-> **`aurumflow-shell-v3`** (v1 → v2 pada Fase 6, v2 → v3 pada Fase 8 saat `app.js` menerima komponen
-> `kasbonForm`); sinkronisasi versi antara `sw.js` dan `AGENTS.md` dijaga assertion `G.17`–`G.18`
-> (`qc_fase_6`).
+> **`aurumflow-shell-v4`** (v1 → v2 pada Fase 6, v2 → v3 pada Fase 8 saat `app.js` menerima komponen
+> `kasbonForm`, v3 → v4 pada Fase 9 saat `tellerForm`/`settlementForm` menerima state OPEX);
+> sinkronisasi versi antara `sw.js` dan `AGENTS.md` dijaga assertion `G.17`–`G.18` (`qc_fase_6`).
 
 **Gating sadar peran.** `BaseController::roleLandingPath()` adalah satu-satunya pemetaan peran →
 beranda: `investor` → `/investor/dashboard`, selain itu → `/dashboard`. `/dashboard` **operator-only**
@@ -754,7 +785,7 @@ tiap peran punya **satu** pintu kredensial:
 
 **Isolasi bersifat *allow-list*.** Permukaan yang menerima peran `cashier` berjumlah **dua**
 (sejak Fase 8): `TellerController` (`GET /operator/teller`, `POST /operator/teller`,
-`POST /operator/teller/talangan`) dan `KasbonController` (`GET /operator/kasbon`,
+`POST /operator/teller/talangan`, `POST /operator/opex/pay`) dan `KasbonController` (`GET /operator/kasbon`,
 `POST /operator/kasbon`, `POST /operator/kasbon/angsuran`, `POST /operator/kasbon/petani`) —
 keduanya lewat `ALLOWED_ROLES = [ROLE_OPERATOR, ROLE_CASHIER]`. Rekonsiliasi, kelola modal
 (+ 6 sub-POST), kelola kasir, dasbor ringkasan, dan seluruh portal mitra **tidak pernah** menyebut
@@ -835,6 +866,85 @@ dari DOM. Tab **Buku Kasbon** adalah tab ke-6 bagi operator dan ke-2 bagi kasir.
 berurutan: `miner_loan_ledger` → `miner_loans` → `miners`, **sebelum** `cash_mutations` pos kas meja
 (`QcFixture::resetKasbonState()` melakukannya).
 
+### 7.16 Beban operasional non-emas / OPEX (Fase 9) — WAJIB
+
+Beban koordinasi lapangan, pengamanan wilayah, konsumsi/gas, dan biaya lain-lain dibayar **tunai dari
+laci kasir** — uang benar-benar meninggalkan Kas Meja Bakar. Sebelum Fase 9 angka itu hanya _diketik_
+di layar rekonsiliasi (`coord_fee`) sebagai pengurang pendapatan: tidak ada baris kas, tidak ada
+penerima, dan tidak dapat dicatat pada hari tanpa penjualan. Sekarang ia menjadi **voucher kas**.
+
+| Tabel | Isi |
+|---|---|
+| `operational_expenses` (tabel ke-14) | `expense_date`, `category` (`coordination`/`security`/`consumable`/`other`), `payee_name`, `amount`, `register_id`, `mutation_id`, `settlement_id`, `recorded_by`, `notes` |
+
+**Satu voucher = satu baris kas.** `ExpenseService::pay()` menjalankan satu
+`Database::transaction()` dengan urutan tetap: kunci Kas Meja Bakar → cek saldo → mutasi `out`
+(`Biaya koordinasi: <penerima>`) → saldo turun → voucher. Urutan itu wajib karena
+`operational_expenses.mutation_id` memakai FK `ON DELETE RESTRICT` yang diperiksa seketika.
+Saldo kurang → `422` tanpa tulisan. Tombol **"− Catat Beban Kas"** ada di layar kasir
+(`/operator/teller`, modal — bukan halaman baru) dan menerima peran **operator maupun kasir**.
+
+**Settlement otomatis (anti-fiktif).** Isian `coord_fee` **dihapus** dari layar rekonsiliasi.
+`SettlementService::batchContext()` dan `settle()` menjumlahkan sendiri voucher yang belum terserap
+(`settlement_id IS NULL`), lalu:
+`daily_coordination_fee` = subtotal non-konsumsi, `consumable_opex` = subtotal kategori
+`consumable` (item O-3 warisan Fase 3 kini terisi). Setelah baris sesi lahir, voucher ditandai
+`settlement_id` (diserap) di dalam transaksi yang sama. Karena angkanya berasal dari voucher —
+bukan isian — operator tidak dapat menaikkan beban untuk menahan uang di laci.
+
+**Rumus.** `total_cash = pendapatan toko` (bukan `pendapatan − beban`), sehingga
+`kas + brankas = pendapatan` dan laci menerima penggantian atas uang yang sudah keluar. Laba
+**tidak berubah**: `net = laba kotor − beban − pemulihan defisit`, dan bagi hasil 80 : 20 dihitung
+dari `net`. Kas meja kembali ke posisi semula (mis. Rp 50.000.000) setelah tutup buku, sama seperti
+sebelum Fase 9. Beban yang melebihi pendapatan toko ditolak `422` (salah ketik voucher).
+
+**Memasang tabel OPEX pada instalasi yang sudah berjalan.** Jalankan `php database/migrate.php`
+(migrasi **M3**): satu `CREATE TABLE IF NOT EXISTS`, idempoten, nol `ALTER`.
+
+**Membersihkan data uji.** `operational_expenses.mutation_id` memakai `ON DELETE RESTRICT`, jadi
+hapus voucher **sebelum** `cash_mutations` (`QcFixture::resetExpenseState()` sudah dipanggil paling
+awal oleh `resetTellerState()`/`clearSettlementTraces()`).
+
+---
+
+## 7a. Buku hak mitra lapangan (Fase 10)
+
+Aparat/petugas lapangan dibayar **persentase dari laba kotor harian**, dan pembayarannya
+dibukukan sebagai **saldo hak** yang baru keluar dari kas saat dicairkan.
+
+| Route | Peran | Fungsi |
+| :--- | :--- | :--- |
+| `GET /operator/petugas` | operator | Layar G — ringkasan, daftar petugas, buku hak terbaru |
+| `POST /operator/petugas` | operator | buat akun petugas + PIN + tarif |
+| `POST /operator/petugas/potongan` | operator | ubah tarif `cut_pct` |
+| `POST /operator/petugas/pin` | operator | reset PIN |
+| `POST /operator/petugas/status` | operator | aktif / nonaktif |
+| `POST /operator/petugas/bonus` | operator | bonus manual (**akrual**, tanpa kas & tanpa voucher OPEX) |
+| `POST /operator/petugas/cair` | operator | pencairan hak dari Kas Meja Bakar **atau** Brankas Utama |
+| `GET /officer/login` · `POST /officer/login` | publik | pintu PIN mitra lapangan |
+| `GET /officer/dashboard` · `GET /officer/riwayat` | officer | portal blind (saldo hak + riwayat sendiri) |
+
+**Aritmetika (sen integer).** `potongan = floor((basis_sen × pct_perseratus + 5000) / 10000)`
+dengan `basis = max(0, laba kotor)`; `net = laba kotor − Σbeban OPEX − Σbonus akrual −
+Σpotongan − pemulihan defisit`; `total_cash = pendapatan toko` (aturan Fase 9) sehingga
+`kas` memuat uang yang **terparkir di laci** untuk petugas.
+
+**Dua kanal pemotongan laba, masing-masing SEKALI.** Potongan dibebankan saat akrual tutup buku;
+bonus dibebankan saat tutup buku berikutnya menyerapnya (`officer_ledger_entries.settlement_id`).
+Keduanya **bukan** voucher `operational_expenses` — itu akan memotong laba dua kali. Pencairan
+**tidak pernah** menjadi beban: ia hanya memindahkan kas dan mengurangi kewajiban.
+
+**Isolasi blind.** Petugas hanya dapat membuka `/officer/dashboard` dan `/officer/riwayat`
+(GET, tanpa POST). Portal **tidak pernah** merender `cut_pct` maupun `base_amount` (tarif × basis
+= laba kotor pemilik sistem) dan tidak menyentuh istilah pemilik (omzet, laba, pool, hulu,
+talangan, kasbon). Diuji `qc_fase_10` grup H.
+
+**Angka contoh (Protokol 10).** 18,050 gr @ Rp 2.080.000 (pendapatan Rp 37.544.000), modal hulu
+Rp 35.157.500, voucher OPEX Rp 200.000, bonus akrual Rp 150.000, petugas 2,5 % →
+potongan **Rp 59.662,50**, laba bersih **Rp 1.976.837,50** (pengelola 1.581.470,00 / pool
+395.367,50), saldo hak petugas **Rp 209.662,50**, Kas Meja Bakar **Rp 50.209.662,50**
+= baseline + saldo hak.
+
 ---
 
 ## 8. Pemecahan masalah
@@ -865,7 +975,7 @@ berurutan: `miner_loan_ledger` → `miner_loans` → `miners`, **sebelum** `cash
 ## 9. Catatan lingkungan pengembangan ini
 
 Mesin dev yang dipakai menyusun proyek ini **tidak** memiliki MySQL 8.0. QC
-(8 suite) dijalankan terhadap **MariaDB 12.3.2** (MySQL-compatible) pada
+(16 suite) dijalankan terhadap **MariaDB 12.3.2** (MySQL-compatible) pada
 database uji yang ditunjuk `.env` (dev: `aurumflow_dev`).
 
 Konsekuensinya:

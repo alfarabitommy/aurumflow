@@ -28,6 +28,15 @@ final class Constants
     public const ROLE_CASHIER = 'cashier';
 
     /**
+     * Mitra lapangan / aparat (Fase 10) — penerima potongan persentase dari
+     * laba kotor harian melalui buku hak (`officers`).
+     *
+     * Nilai ini ditambahkan **di ujung** daftar ENUM (`append-only`), sehingga
+     * baris lama tidak bergeser arti.
+     */
+    public const ROLE_OFFICER = 'officer';
+
+    /**
      * Label tampilan per peran — SATU-SATUNYA pemilik label peran.
      *
      * Nilai enum mentah (`operator`/`investor`/`cashier`) tidak pernah dicetak
@@ -40,6 +49,7 @@ final class Constants
         self::ROLE_OPERATOR => 'Pengelola (Operator)',
         self::ROLE_INVESTOR => 'Mitra Pemodal (Investor)',
         self::ROLE_CASHIER  => 'Kasir Meja Bakar',
+        self::ROLE_OFFICER  => 'Mitra Lapangan (Petugas)',
     ];
 
     /**

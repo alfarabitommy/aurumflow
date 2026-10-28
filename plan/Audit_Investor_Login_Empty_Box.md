@@ -1,5 +1,14 @@
 # Audit — Kotak Kosong di Pintu PIN Mitra (`/investor/login`)
 
+> **Status dokumen (pasca-Fase 9 — sinkronisasi dokumentasi).** Seluruh angka dan perilaku di
+> bawah ini — termasuk (bila ada) penyebutan **13 tabel** atau kurang, **14 suite / 853
+> assertion**, `CACHE_NAME` **v3**, dan isian **`coord_fee`** — adalah **potret fase tersebut**,
+> bukan keadaan sekarang. Keadaan terkini: **14 tabel** (termasuk `operational_expenses`, nol `ALTER`),
+> `CACHE_NAME` **`aurumflow-shell-v4`**, **15 suite / 900 assertion / 0 gagal**, beban operasional
+> dicatat sebagai **voucher kas** di meja kasir lalu diserap otomatis oleh tutup buku
+> (`total_cash = pendapatan`). Rujukan terkini: `plan/Summary_Fase_9_OPEX_AurumFlow.md`.
+
+
 **Jenis:** investigasi baca-saja (*read-only*), tanpa perubahan kode.
 **Cakupan:** `app/Views/investor/login.php`, `app/Views/layouts/auth.php`, `app/Views/investor/onboarding.php`,
 `public/assets/js/app.js`, `public/assets/js/alpine.min.js`, `resources/css/tailwind.input.css`,

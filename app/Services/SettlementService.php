@@ -13,6 +13,9 @@ use AurumFlow\Models\CashMutation;
 use AurumFlow\Models\CashRegister;
 use AurumFlow\Models\DailySettlement;
 use AurumFlow\Models\HuluTransaction;
+use AurumFlow\Models\OperationalExpense;
+use AurumFlow\Models\Officer;
+use AurumFlow\Models\OfficerLedgerEntry;
 use AurumFlow\Models\SystemSetting;
 use PDO;
 
@@ -46,11 +49,20 @@ use PDO;
  * Rumus bisnis (PRD § 6 Modul 2 + Roadmap Protokol QC Manual 3):
  *   Pendapatan Toko = Berat Dijual x Harga Jual Riil
  *   Laba Kotor      = Pendapatan Toko - Modal Belanja Hulu
- *   Laba Bersih     = Laba Kotor - Beban Aparat - Pemulihan Defisit
+ *   Laba Bersih     = Laba Kotor - Beban Operasional - Pemulihan Defisit
  *   Bagi hasil      = 80% Pengelola, 20% Pool Investor (pembukuan saja sampai
  *                     Fase 4 mendistribusikan ke dompet masing-masing)
+ *   Kas diterima    = Pendapatan Toko (PENUH) — Fase 9, lihat catatan di bawah
  *   Hari minus      = defisit masuk `carryover_deficit` TANPA memotong modal
  *                     investor (PRD § 4.2)
+ *
+ * Sejak Fase 9 beban operasional TIDAK lagi mengurangi kas yang dialokasikan.
+ * Alasannya aritmetika, bukan selera: beban sudah keluar tunai dari laci kasir
+ * lebih dahulu (`ExpenseService::pay()`), jadi laci harus menerima penggantian
+ * lewat alokasi `kas`. Bila beban mengurangi laba DAN kas yang dialokasikan,
+ * saldo buku menjadi lebih rendah daripada uang fisik tepat sebesar beban pada
+ * setiap sesi (audit/Audit_Biaya_Koordinasi_AurumFlow.md § 5.5 skenario B).
+ * Beban tetap menjadi pengurang laba — itulah yang dipakai PRD § 3.3.
  */
 final class SettlementService
 {
@@ -130,7 +142,6 @@ final class SettlementService
         }
 
         $densityHundredths = self::parseDensity($input['density_pct'] ?? null);
-        $coordFeeCents = self::parseMoneyInput($input['coord_fee'] ?? null, 'Beban aparat');
 
         // Dua isian alokasi yang sama-sama kosong berarti "pakai saran sistem".
         // Ini yang membuat form tetap benar tanpa JavaScript: operator cukup
@@ -147,6 +158,29 @@ final class SettlementService
         ]);
 
         $context ??= self::batchContext();
+
+        // Sejak Fase 9 beban operasional TIDAK lagi diketik operator: nilainya
+        // berasal dari voucher `operational_expenses` yang belum terserap
+        // (`$context['coord_fee_cents']`), dijumlahkan peladen. Isian
+        // `$input['coord_fee']` hanya tersisa sebagai seam kalkulasi murni —
+        // dipakai uji tanpa basis data, dan TIDAK pernah dikirim controller.
+        $coordFeeCents = self::coordFeeCents($input, $context);
+
+        // Rincian konsumsi/gas (kolom warisan `consumable_opex`, item O-3).
+        // Hanya untuk pengisian kolom; perhitungan laba memakai TOTAL beban.
+        $consumableOpexCents = 0;
+
+        if (array_key_exists('consumable_opex_cents', $context)) {
+            $consumableRaw = $context['consumable_opex_cents'];
+
+            if (!is_int($consumableRaw) || $consumableRaw < 0 || $consumableRaw > $coordFeeCents) {
+                throw new \RuntimeException('Rincian konsumsi/gas pada konteks settlement tidak valid.');
+            }
+
+            $consumableOpexCents = $consumableRaw;
+        }
+
+        $expenseCount = is_array($context['open_expenses'] ?? null) ? count($context['open_expenses']) : 0;
 
         $holdingMg = (int) ($context['holding_mg'] ?? 0);
         $holdingCostCents = (int) ($context['holding_cost_cents'] ?? 0);
@@ -173,7 +207,43 @@ final class SettlementService
 
         $revenueCents = (int) $priced['gross_cents'];
         $grossCents = $revenueCents - $holdingCostCents;
-        $afterFeeCents = $grossCents - $coordFeeCents;
+
+        // Hak mitra lapangan (Fase 10) — DUA kanal, masing-masing mengurangi
+        // laba TEPAT SEKALI:
+        //   * potongan persentase (`cut`) dihitung peladen dari laba kotor dan
+        //     dicatat sebagai akrual pada sesi ini;
+        //   * bonus manual (`bonus`) baru mengurangi laba ketika tutup buku ini
+        //     MENYERAPNYA (`settlement_id` masih NULL).
+        // Keduanya BUKAN voucher `operational_expenses`: menuliskannya sebagai
+        // voucher berarti memotong laba dua kali (rencana Fase 10 § 5.5).
+        $roster = is_array($context['officers'] ?? null) ? $context['officers'] : [];
+        $officerBonusCents = self::nonNegativeInt($context['officer_bonus_cents'] ?? 0, 'Akrual bonus petugas');
+        $officerCapHundredths = self::nonNegativeInt(
+            $context['officer_cap_hundredths'] ?? 10000,
+            'Batas potongan petugas'
+        );
+
+        if ($officerCapHundredths <= 0 || $officerCapHundredths > 10000) {
+            throw new \RuntimeException('Batas potongan mitra lapangan pada basis data tidak valid.');
+        }
+
+        $officerCut = OfficerService::previewCuts($roster, $grossCents);
+
+        if ((int) $officerCut['sum_pct_hundredths'] > $officerCapHundredths) {
+            throw new \InvalidArgumentException(
+                'Total persentase potongan mitra lapangan ('
+                . self::hundredthsToDecimal((int) $officerCut['sum_pct_hundredths'])
+                . ' %) melebihi batas sistem (' . self::hundredthsToDecimal($officerCapHundredths)
+                . ' %). Perbaiki tarif sebelum menutup buku.'
+            );
+        }
+
+        $officerCutCents = (int) $officerCut['cut_cents'];
+
+        // D-2: potongan hanya dari laba kotor yang benar-benar ada. Kombinasi
+        // beban + bonus + potongan boleh melebihi laba kotor (defisit baru),
+        // tetapi potongannya sendiri tidak pernah melebihi laba kotor.
+        $afterFeeCents = $grossCents - $coordFeeCents - $officerBonusCents - $officerCutCents;
 
         // Defisit hari sebelumnya dipotong LEBIH DAHULU, dan hanya dari laba
         // yang benar-benar ada (tidak pernah menyentuh modal investor).
@@ -192,18 +262,45 @@ final class SettlementService
         $operatorCents = $netCents > 0 ? self::shareOf($netCents, self::OPERATOR_SHARE_PCT) : 0;
         $poolCents = $netCents > 0 ? $netCents - $operatorCents : 0;
 
-        // Kas fisik yang diterima hari ini. Bila pendapatan tidak menutup
-        // beban aparat, tidak ada kas yang dapat dialokasikan.
-        $totalCashCents = $revenueCents - $coordFeeCents;
+        // Kas fisik yang benar-benar diterima dari toko = PENDAPATAN PENUH.
+        //
+        // Fase 9 (perbaikan double-count): beban operasional sudah keluar TUNAI
+        // dari laci kasir lebih dahulu (`ExpenseService::pay()`), sehingga laci
+        // harus menerima penggantiannya lewat alokasi `kas`. Karena itu beban
+        // hanya mengurangi LABA (`$afterFeeCents` di atas), bukan kas yang
+        // dialokasikan. Mengurangi keduanya membuat saldo buku lebih rendah
+        // daripada uang fisik tepat sebesar beban setiap hari
+        // (audit/Audit_Biaya_Koordinasi_AurumFlow.md § 5.5 skenario B).
+        $totalCashCents = $revenueCents;
 
-        if ($totalCashCents < 0) {
+        // Satu-satunya penjagaan yang tersisa: pendapatan toko wajib menutup
+        // beban operasional sesi ini (audit § 8.4e). Tanpa ini, beban raksasa
+        // dari salah ketik voucher akan memaksa `kas` melebihi uang yang ada.
+        if ($coordFeeCents > $revenueCents) {
             throw new \InvalidArgumentException(
-                'Pendapatan toko lebih kecil dari beban aparat — tidak ada kas yang dapat dialokasikan.'
+                'Beban operasional (' . self::centsToDecimal($coordFeeCents)
+                . ') melebihi pendapatan toko (' . self::centsToDecimal($revenueCents)
+                . '). Periksa voucher beban sebelum menutup buku.'
+            );
+        }
+
+        // Penjagaan kedua (Fase 10): beban + hak petugas tidak boleh melebihi
+        // pendapatan toko. Tanpa ini, salah ketik nominal bonus dapat memaksa
+        // `kas` melebihi uang yang benar-benar diterima dari toko.
+        $officerTotalCents = $officerBonusCents + $officerCutCents;
+
+        if ($coordFeeCents + $officerTotalCents > $revenueCents) {
+            throw new \InvalidArgumentException(
+                'Beban operasional + hak mitra lapangan ('
+                . self::centsToDecimal($coordFeeCents + $officerTotalCents)
+                . ') melebihi pendapatan toko (' . self::centsToDecimal($revenueCents)
+                . '). Periksa voucher beban dan buku hak petugas sebelum menutup buku.'
             );
         }
 
         // Saran Smart Auto-Split: laba bersih ke brankas, sisanya (modal
-        // belanja hulu + defisit yang dipulihkan) kembali ke meja.
+        // belanja hulu + beban yang sudah dibayar dari laci + defisit yang
+        // dipulihkan) kembali ke meja.
         $suggestedBrankasCents = max(0, $netCents);
         $suggestedKasCents = $totalCashCents - $suggestedBrankasCents;
 
@@ -282,6 +379,34 @@ final class SettlementService
             'suggested_brankas'        => self::centsToDecimal($suggestedBrankasCents),
             'suggested_brankas_cents'  => $suggestedBrankasCents,
 
+            // Beban operasional (Fase 9). `coord_fee` = TOTAL voucher yang
+            // terserap; `consumable_opex` adalah rinciannya untuk kolom warisan
+            // O-3, sehingga `daily_coordination_fee + consumable_opex = total`.
+            'consumable_opex'          => self::centsToDecimal($consumableOpexCents),
+            'consumable_opex_cents'    => $consumableOpexCents,
+            'coordination_fee'         => self::centsToDecimal($coordFeeCents - $consumableOpexCents),
+            'coordination_fee_cents'   => $coordFeeCents - $consumableOpexCents,
+            'expense_count'            => $expenseCount,
+
+            // Hak mitra lapangan (Fase 10). `officer_total_cents` = bonus yang
+            // diserap + potongan sesi ini; keduanya sudah mengurangi `net`
+            // (lewat `$afterFeeCents`) dan keduanya membuat `kas` memuat uang
+            // yang terparkir di laci untuk dibayarkan kemudian.
+            'officer_count'            => count($officerCut['rows']),
+            'officer_base'             => self::centsToDecimal(max(0, $grossCents)),
+            'officer_base_cents'       => max(0, $grossCents),
+            'officer_cut'              => self::centsToDecimal($officerCutCents),
+            'officer_cut_cents'        => $officerCutCents,
+            'officer_bonus'            => self::centsToDecimal($officerBonusCents),
+            'officer_bonus_cents'      => $officerBonusCents,
+            'officer_total'            => self::centsToDecimal($officerTotalCents),
+            'officer_total_cents'      => $officerTotalCents,
+            'officer_cap'              => self::hundredthsToDecimal($officerCapHundredths),
+            'officer_cap_cents'        => $officerCut['cap_cents'],
+            'officer_sum_pct'          => self::hundredthsToDecimal((int) $officerCut['sum_pct_hundredths']),
+            'officer_cut_scaled'       => (bool) $officerCut['scaled'],
+            'officer_allocation'       => $officerCut['rows'],
+
             // Dana talangan (Fase 6) — fee membebani hak pengelola saja.
             'bridge_count'             => (int) $bridge['count'],
             'bridge_fee'               => self::centsToDecimal((int) $bridge['fee_cents']),
@@ -307,20 +432,130 @@ final class SettlementService
      * sehingga pratinjau Layar C menghitung penyerapan fee dengan rumus yang
      * sama dengan eksekusinya (`settle()` mengirim baris TERKUNCI).
      *
+     * Sejak Fase 9 konteks membawa pula total beban operasional dari voucher
+     * yang belum terserap (`coord_fee_cents`), rincian konsumsi/gasnya, dan
+     * daftar vouchernya untuk ditampilkan read-only di Layar C.
+     *
      * @return array{holding_mg: int, holding_cost_cents: int, active_deficit_cents: int,
-     *               bridge_loans: list<array<string, mixed>>}
+     *               bridge_loans: list<array<string, mixed>>, coord_fee_cents: int,
+     *               consumable_opex_cents: int, open_expenses: list<array<string, mixed>>}
      */
     public static function batchContext(): array
     {
         $totals = HuluTransaction::holdingTotals();
         $deficitRaw = SystemSetting::get(self::SETTING_ACTIVE_DEFICIT, '0.00');
+        $openExpenses = OperationalExpense::unabsorbed();
+        $expenseCents = self::expenseTotals($openExpenses);
+
+        // Hak mitra lapangan (Fase 10): roster aktif + akrual bonus yang belum
+        // terserap. Batas Σ tarif dibaca lunak di sini (pratinjau tidak boleh
+        // gagal render karena satu kunci setting rusak); `settle()` membacanya
+        // KERAS dan menolak tutup buku (fail-closed).
+        $roster = OfficerService::roster();
+        $openBonuses = OfficerLedgerEntry::unabsorbedBonuses();
+        $bonusCents = 0;
+
+        foreach ($openBonuses as $row) {
+            $bonusCents += TellerService::moneyToCents((string) ($row['amount'] ?? '0.00'));
+        }
+
+        try {
+            $capHundredths = OfficerService::capHundredths();
+        } catch (\RuntimeException $exception) {
+            Logger::warning('Batas potongan mitra lapangan tidak terbaca', [
+                'alasan' => $exception->getMessage(),
+            ]);
+
+            $capHundredths = 10000;
+        }
 
         return [
             'holding_mg'            => self::gramsToMilligrams($totals['grams']),
             'holding_cost_cents'    => TellerService::moneyToCents($totals['cost']),
             'active_deficit_cents'  => TellerService::moneyToCents((string) ($deficitRaw ?? '0.00')),
             'bridge_loans'          => BridgeLoanService::activeLoans(),
+            'coord_fee_cents'       => $expenseCents['total_cents'],
+            'consumable_opex_cents' => $expenseCents['consumable_cents'],
+            'open_expenses'         => $openExpenses,
+            'officers'              => $roster,
+            'officer_bonus_cents'   => $bonusCents,
+            'open_officer_bonuses'  => $openBonuses,
+            'officer_cap_hundredths' => $capHundredths,
         ];
+    }
+
+    /**
+     * Jumlahkan voucher beban yang belum terserap.
+     *
+     * Dipakai `batchContext()` (pratinjau) DAN `settle()` (baris terkunci),
+     * sehingga pratinjau Layar C menghitung dengan rumus yang sama dengan
+     * eksekusinya. Nilai rusak pada basis data tidak pernah ditelan diam-diam:
+     * `TellerService::moneyToCents()` melempar `RuntimeException`.
+     *
+     * `consumable` dipisahkan karena kolom warisan `daily_settlements.consumable_opex`
+     * (item O-3 Fase 3) kini diisi dari kategori itu; sisanya masuk
+     * `daily_coordination_fee`. Jumlah kedua kolom = total beban yang dipotong.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @return array{total_cents: int, consumable_cents: int, ids: list<string>}
+     */
+    private static function expenseTotals(array $rows): array
+    {
+        $totalCents = 0;
+        $consumableCents = 0;
+        $ids = [];
+
+        foreach ($rows as $row) {
+            $id = (string) ($row['id'] ?? '');
+            $amountCents = TellerService::moneyToCents((string) ($row['amount'] ?? '0.00'));
+
+            if ($id === '' || $amountCents < 0) {
+                throw new \RuntimeException('Voucher beban operasional pada basis data tidak valid.');
+            }
+
+            $ids[] = $id;
+            $totalCents += $amountCents;
+
+            if ((string) ($row['category'] ?? '') === OperationalExpense::CATEGORY_CONSUMABLE) {
+                $consumableCents += $amountCents;
+            }
+        }
+
+        return [
+            'total_cents'      => $totalCents,
+            'consumable_cents' => $consumableCents,
+            'ids'              => $ids,
+        ];
+    }
+
+    /**
+     * Beban operasional sesi ini (sen).
+     *
+     * Sumbernya `$context['coord_fee_cents']` — hasil penjumlahan voucher yang
+     * dilakukan peladen. Isian `$input['coord_fee']` HANYA dipakai bila konteks
+     * tidak menyediakannya: itu seam kalkulasi murni untuk uji tanpa basis data
+     * (`qc_fase_3` grup A/B), bukan jalur produksi — controller tidak pernah
+     * mengirim kunci itu.
+     *
+     * @param array<string, mixed> $input
+     * @param array<string, mixed> $context
+     *
+     * @throws \InvalidArgumentException nominal beban tidak sah
+     * @throws \RuntimeException nilai konteks rusak (bukan input pengguna)
+     */
+    private static function coordFeeCents(array $input, array $context): int
+    {
+        if (array_key_exists('coord_fee_cents', $context)) {
+            $raw = $context['coord_fee_cents'];
+
+            if (!is_int($raw) || $raw < 0) {
+                throw new \RuntimeException('Total beban operasional pada konteks settlement tidak valid.');
+            }
+
+            return $raw;
+        }
+
+        return self::parseMoneyInput($input['coord_fee'] ?? null, 'Beban aparat');
     }
 
     // -----------------------------------------------------------------------
@@ -339,6 +574,8 @@ final class SettlementService
      *      `hulu_transactions`;
      *   4. hitung ulang seluruh angka dari himpunan yang terkunci;
      *   5. kunci & baca `active_carryover_deficit`;
+     *   5b. kunci & serap voucher `operational_expenses` yang belum terserap
+     *      (Fase 9 — sumber `daily_coordination_fee`/`consumable_opex`);
      *   6. tulis `daily_settlements`, ubah status hulu, distribusikan kas,
      *      catat dua mutasi `in`, perbarui defisit berjalan;
      *   7. distribusikan pool 20 % ke dompet mitra yang modalnya terserap
@@ -425,11 +662,47 @@ final class SettlementService
                     );
                 }
 
+                // Fase 9: voucher beban operasional yang belum terserap dikunci
+                // (FIFO) SEBELUM dibaca, sehingga dua tutup buku serentak tidak
+                // dapat menyerap voucher yang sama dua kali. Urutan penguncian
+                // global: … → hulu_transactions → operational_expenses →
+                // system_settings (AGENTS.md).
+                $expenseRows = OperationalExpense::lockUnabsorbedForUpdate();
+                $expenseTotals = self::expenseTotals($expenseRows);
+
+                // Fase 10: baris buku hak petugas dikunci SESUDAH voucher beban
+                // dan SEBELUM system_settings — urutan penguncian global:
+                // … → operational_expenses → officers → officer_ledger_entries
+                // → system_settings. Mengunci seluruh `officers` membuat tarif
+                // tidak dapat berubah di tengah perhitungan.
+                $lockedOfficers = Officer::lockAllForUpdate();
+                $officerIndex = [];
+
+                foreach ($lockedOfficers as $officerRow) {
+                    $officerIndex[(string) $officerRow['id']] = $officerRow;
+                }
+
+                $officerRoster = OfficerService::roster($lockedOfficers);
+                $bonusRows = OfficerLedgerEntry::lockUnabsorbedBonusesForUpdate();
+                $bonusCents = 0;
+
+                foreach ($bonusRows as $bonusRow) {
+                    $bonusCents += TellerService::moneyToCents((string) ($bonusRow['amount'] ?? '0.00'));
+                }
+
+                $officerCapHundredths = OfficerService::capHundredths();
+
                 $quote = self::quote($input, [
-                    'holding_mg'           => $holdingMg,
-                    'holding_cost_cents'   => $holdingCostCents,
-                    'active_deficit_cents' => TellerService::moneyToCents($deficitRaw),
-                    'bridge_loans'         => $bridgeRows,
+                    'holding_mg'            => $holdingMg,
+                    'holding_cost_cents'    => $holdingCostCents,
+                    'active_deficit_cents'  => TellerService::moneyToCents($deficitRaw),
+                    'bridge_loans'          => $bridgeRows,
+                    'coord_fee_cents'       => $expenseTotals['total_cents'],
+                    'consumable_opex_cents' => $expenseTotals['consumable_cents'],
+                    'open_expenses'         => $expenseRows,
+                    'officers'              => $officerRoster,
+                    'officer_bonus_cents'   => $bonusCents,
+                    'officer_cap_hundredths' => $officerCapHundredths,
                 ]);
 
                 // Penjagaan saldo (rencana Fase 6 A-9): pengembalian talangan
@@ -459,8 +732,10 @@ final class SettlementService
                     'shop_water_density_pct' => $quote['density'],
                     'shop_price_per_g'       => $quote['price'],
                     'total_shop_revenue'     => $quote['revenue'],
-                    'daily_coordination_fee' => $quote['coord_fee'],
-                    'consumable_opex'        => '0.00',
+                    // Fase 9: kedua kolom diisi dari voucher beban yang terkunci
+                    // (`daily_coordination_fee + consumable_opex` = total beban).
+                    'daily_coordination_fee' => $quote['coordination_fee'],
+                    'consumable_opex'        => $quote['consumable_opex'],
                     'deficit_recovery_used'  => $quote['deficit_recovery'],
                     'net_settled_profit'     => $quote['net'],
                     'operator_share_80'      => $quote['operator_share'],
@@ -468,6 +743,24 @@ final class SettlementService
                     'carryover_deficit'      => $quote['carryover'],
                     'receipt_photo_url'      => $receipt['url'],
                 ]);
+
+                // 5b. Tandai voucher beban sebagai TERSERAP sesi ini. Baris sesi
+                //     sudah lahir, sehingga FK `operational_expenses.settlement_id`
+                //     terpenuhi. Jumlah baris yang berubah wajib sama dengan yang
+                //     dikunci — bila tidak, ada voucher yang berpindah sesi dan
+                //     seluruh transaksi dibatalkan.
+                $expenseIds = array_map(
+                    static fn (array $row): string => (string) ($row['id'] ?? ''),
+                    $expenseRows
+                );
+                $absorbedExpenses = OperationalExpense::absorb($settlementId, $expenseIds);
+
+                if ($absorbedExpenses !== count($expenseIds)) {
+                    throw new \RuntimeException(
+                        'Jumlah voucher beban yang diserap tidak sesuai (' . $absorbedExpenses
+                        . ' dari ' . count($expenseIds) . '). Seluruh perubahan dibatalkan.'
+                    );
+                }
 
                 $settledRows = HuluTransaction::settleBatch($settlementId, $ids);
 
@@ -502,6 +795,20 @@ final class SettlementService
                     $wallets
                 );
 
+                // 8. Hak mitra lapangan (Fase 10): akrual potongan sesi ini
+                //    (kredit buku hak, TANPA mutasi kas — uangnya terparkir di
+                //    laci) lalu penyerapan akrual bonus yang belum terserap
+                //    (pengurang laba sekaligus, tidak pernah dua kali).
+                $officerWritten = OfficerService::accrueForSettlement(
+                    $settlementId,
+                    (array) $quote['officer_allocation'],
+                    $officerIndex,
+                    (string) $quote['officer_base'],
+                    (string) ($_SESSION['user_id'] ?? '') === '' ? null : (string) $_SESSION['user_id']
+                );
+
+                $bonusWritten = OfficerService::absorbBonuses($settlementId, $bonusRows);
+
                 $mutations = self::mutationRows(
                     (string) $teller['id'],
                     (string) $brankas['id'],
@@ -533,8 +840,11 @@ final class SettlementService
                     'settlement_date' => $settlementDate,
                     'settled_rows'    => $settledRows,
                     'mutation_count'  => count($mutationIds),
+                    'expense_count'   => count($expenseIds),
                     'allocation'      => $allocation,
                     'bridge'          => $bridge,
+                    'officer'         => $officerWritten,
+                    'officer_bonus'   => $bonusWritten,
                     'teller_before'   => (string) $teller['current_balance'],
                     'teller_after'    => self::centsToDecimal(
                         TellerService::moneyToCents((string) $teller['current_balance'])
@@ -569,6 +879,9 @@ final class SettlementService
             'berat_jual_gr'     => $quote['sold_weight'],
             'pendapatan_toko'   => $quote['revenue'],
             'modal_belanja'     => $quote['holding_cost'],
+            'beban_operasional' => $quote['coord_fee'],
+            'beban_konsumsi'    => $quote['consumable_opex'],
+            'beban_voucher'     => (int) $written['expense_count'],
             'laba_bersih'       => $quote['net'],
             'defisit_dipulihkan' => $quote['deficit_recovery'],
             'defisit_berjalan'  => $quote['active_after'],
@@ -581,6 +894,10 @@ final class SettlementService
             'talangan_kembali'  => (string) ($bridge['total_return'] ?? '0.00'),
             'fee_diserap'       => (string) ($bridge['absorbed'] ?? '0.00'),
             'fee_tak_tertutup'  => (string) ($bridge['uncovered'] ?? '0.00'),
+            'petugas_dipotong'  => (int) ($written['officer']['count'] ?? 0),
+            'potongan_petugas'  => $quote['officer_cut'],
+            'bonus_petugas'     => $quote['officer_bonus'],
+            'bonus_diserap'     => (int) ($written['officer_bonus']['count'] ?? 0),
             'nota'              => $receipt['url'],
         ]);
 
@@ -612,6 +929,22 @@ final class SettlementService
                 'fee_tak_tertutup' => $quote['bridge_uncovered'],
                 'hak_pengelola'    => $quote['operator_share'],
                 'pool_mitra'       => $quote['investor_pool'],
+            ]);
+        }
+
+        // D-2 (keputusan pemilik sistem): beban + hak petugas boleh melebihi
+        // laba kotor sehingga laba bersih minus. Peristiwanya diizinkan, tetapi
+        // layak diperiksa manusia — uang laci ikut menanggung hak petugas.
+        if ((int) $quote['officer_total_cents'] + (int) $quote['coord_fee_cents']
+            > max(0, (int) $quote['gross_cents'])
+        ) {
+            Logger::warning('Hak petugas + beban melebihi laba kotor', [
+                'settlement_id'     => $written['settlement_id'],
+                'laba_kotor'        => $quote['gross'],
+                'beban_operasional' => $quote['coord_fee'],
+                'potongan_petugas'  => $quote['officer_cut'],
+                'bonus_petugas'     => $quote['officer_bonus'],
+                'laba_bersih'       => $quote['net'],
             ]);
         }
 
@@ -920,6 +1253,20 @@ final class SettlementService
         return is_string($raw) ? trim($raw) : '';
     }
 
+    /**
+     * Nilai konteks yang harus berupa integer >= 0 (bukan input pengguna).
+     *
+     * @throws \RuntimeException nilai konteks rusak
+     */
+    private static function nonNegativeInt(mixed $raw, string $label): int
+    {
+        if (!is_int($raw) || $raw < 0) {
+            throw new \RuntimeException($label . ' pada konteks settlement tidak valid.');
+        }
+
+        return $raw;
+    }
+
     // -----------------------------------------------------------------------
     // Aritmetika uang berbasis integer
     // -----------------------------------------------------------------------
@@ -1052,6 +1399,31 @@ final class SettlementService
                 (string) $quote['bridge_fee'],
                 (string) $quote['bridge_absorbed'],
                 (string) $quote['bridge_uncovered']
+            );
+        }
+
+        // Ringkasan beban operasional (Fase 9): voucher yang terserap sesi ini.
+        // Beban TIDAK mengurangi `kas` — ia sudah keluar dari laci lebih dahulu,
+        // sehingga nota ini menjelaskan mengapa `kas` memuat penggantiannya.
+        if ((int) ($quote['expense_count'] ?? 0) > 0) {
+            $notes .= sprintf(
+                '; beban_voucher=%d; beban_total=%s; konsumsi_gas=%s; aparat=%s',
+                (int) $quote['expense_count'],
+                (string) $quote['coord_fee'],
+                (string) $quote['consumable_opex'],
+                (string) $quote['coordination_fee']
+            );
+        }
+
+        // Ringkasan hak mitra lapangan (Fase 10): potongan sesi ini + bonus yang
+        // diserap. Keduanya sudah mengurangi laba, dan keduanya membuat `kas`
+        // memuat uang yang terparkir di laci sampai dicairkan.
+        if ((int) ($quote['officer_count'] ?? 0) > 0 || (int) ($quote['officer_bonus_cents'] ?? 0) > 0) {
+            $notes .= sprintf(
+                '; petugas=%d; potongan_petugas=%s; bonus_petugas=%s',
+                (int) $quote['officer_count'],
+                (string) $quote['officer_cut'],
+                (string) $quote['officer_bonus']
             );
         }
 

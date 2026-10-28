@@ -123,7 +123,17 @@ final class User
         Constants::ROLE_OPERATOR,
         Constants::ROLE_INVESTOR,
         Constants::ROLE_CASHIER,
+        Constants::ROLE_OFFICER,
     ];
+
+    /**
+     * DDL literal `users.role` — SATU-SATUNYA tempat daftar nilai ditulis ulang.
+     *
+     * Urutannya wajib sama dengan `ROLE_ENUM_VALUES` (append-only). Nilainya
+     * literal di kode dan **tidak pernah** berasal dari input, sesuai aturan
+     * "tidak ada nilai dinamis yang diinterpolasi ke string SQL".
+     */
+    private const ROLE_ENUM_DDL = "ENUM('operator', 'investor', 'cashier', 'officer')";
 
     /**
      * Nilai ENUM `users.role` yang benar-benar berlaku di basis data.
@@ -150,22 +160,33 @@ final class User
     }
 
     /**
-     * Apakah ENUM perlu diperluas agar memuat peran kasir?
+     * Apakah ENUM perlu diperluas agar memuat **seluruh** peran resmi?
      *
      * Predikat MURNI (tanpa SQL) supaya skrip migrasi dan QC dapat menguji
-     * keputusan ini tanpa menyentuh basis data.
+     * keputusan ini tanpa menyentuh basis data. Sejak Fase 10 pemeriksaannya
+     * digeneralisasi: setiap nilai `ROLE_ENUM_VALUES` yang belum ada membuat
+     * ENUM perlu diperluas (dulu hanya nilai `cashier` yang diperiksa).
      */
     public static function needsRoleEnumExtension(string $columnType): bool
     {
-        return !in_array(Constants::ROLE_CASHIER, self::parseEnumValues($columnType), true);
+        $existing = self::parseEnumValues($columnType);
+
+        foreach (self::ROLE_ENUM_VALUES as $role) {
+            if (!in_array($role, $existing, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
-     * Perluas `users.role` menjadi tiga nilai bila belum (idempoten, aditif).
+     * Perluas `users.role` menjadi empat nilai bila belum (idempoten, aditif).
      *
-     * `ALTER` hanya dijalankan bila `COLUMN_TYPE` belum memuat `'cashier'`, dan
-     * pernyataannya **hanya menambah** nilai di ujung daftar: tipe, `NOT NULL`,
-     * `DEFAULT`, indeks, serta seluruh baris lama tidak tersentuh.
+     * `ALTER` hanya dijalankan bila `COLUMN_TYPE` belum memuat seluruh nilai
+     * `ROLE_ENUM_VALUES`, dan pernyataannya **hanya menambah** nilai di ujung
+     * daftar: tipe, `NOT NULL`, `DEFAULT`, indeks, serta seluruh baris lama
+     * tidak tersentuh.
      *
      * @return bool true = ALTER dijalankan, false = sudah selaras
      *
@@ -192,8 +213,8 @@ final class User
         // Nilai sengaja ditulis literal (bukan diinterpolasi dari input) dan
         // HANYA ditambahkan di ujung agar tetap metadata in-place.
         Database::query(
-            "ALTER TABLE `users` MODIFY COLUMN `role` "
-            . "ENUM('operator', 'investor', 'cashier') NOT NULL DEFAULT 'investor'"
+            'ALTER TABLE `users` MODIFY COLUMN `role` ' . self::ROLE_ENUM_DDL
+            . " NOT NULL DEFAULT 'investor'"
         );
 
         return true;

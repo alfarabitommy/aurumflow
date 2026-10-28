@@ -75,12 +75,13 @@ final class AuthController extends BaseController
             return;
         }
 
-        // Doktrin "satu kredensial, satu pintu": akun kasir memakai PIN ber-pepper
-        // (Fase 7), sehingga hash-nya tidak akan pernah cocok di sini. Penolakan
-        // eksplisit menjaga pintu kata sandi tetap bukan pintu belakang ke akun
-        // kasir bila kelak seseorang menuliskan kata sandi pada baris itu.
+        // Doktrin "satu kredensial, satu pintu": akun kasir & mitra lapangan
+        // memakai PIN ber-pepper (Fase 7 & Fase 10), sehingga hash-nya tidak
+        // akan pernah cocok di sini. Penolakan eksplisit menjaga pintu kata
+        // sandi tetap bukan pintu belakang ke akun mereka bila kelak seseorang
+        // menuliskan kata sandi pada baris itu.
         if ($user === null
-            || (string) $user['role'] === Constants::ROLE_CASHIER
+            || in_array((string) $user['role'], [Constants::ROLE_CASHIER, Constants::ROLE_OFFICER], true)
             || !User::verifyPassword($user, $password)
         ) {
             $lockedSeconds = PinThrottle::recordFailure($phoneNumber, $ipAddress);

@@ -12,7 +12,9 @@ declare(strict_types=1);
  *   - Smart Auto-Split: sistem MENYARANKAN alokasi kas (modal belanja hulu
  *     kembali ke Kas Meja Bakar, laba bersih ke Brankas Utama) tetapi kedua
  *     isian tetap milik operator. Jumlahnya wajib sama dengan kas yang
- *     diterima (pendapatan toko - beban aparat).
+ *     diterima — sejak Fase 9 itu berarti PENDAPATAN TOKO PENUH, karena beban
+ *     operasional sudah keluar tunai dari laci lebih dahulu dan laci menerima
+ *     penggantiannya.
  *   - Tanpa JavaScript pun form tetap benar: dua isian alokasi yang dibiarkan
  *     kosong berarti "pakai saran sistem" (dihitung peladen).
  *   - Seluruh angka final dihitung ulang SettlementService; nominal apa pun
@@ -44,7 +46,6 @@ $formToken = isset($formToken) && is_string($formToken) ? $formToken : '';
 $soldValue = isset($input['sold_grams']) && is_string($input['sold_grams']) ? $input['sold_grams'] : '';
 $densityValue = isset($input['density_pct']) && is_string($input['density_pct']) ? $input['density_pct'] : '';
 $priceValue = isset($input['shop_price_per_g']) && is_string($input['shop_price_per_g']) ? $input['shop_price_per_g'] : '';
-$coordValue = isset($input['coord_fee']) && is_string($input['coord_fee']) ? $input['coord_fee'] : '';
 $kasValue = isset($input['kas_split']) && is_string($input['kas_split']) ? $input['kas_split'] : '';
 $brankasValue = isset($input['brankas_split']) && is_string($input['brankas_split']) ? $input['brankas_split'] : '';
 
@@ -61,6 +62,12 @@ $alpineConfig = isset($alpineConfig) && is_string($alpineConfig) ? $alpineConfig
 $bridge = is_array($bridge ?? null) ? $bridge : [];
 $bridgeRows = is_array($bridge['rows'] ?? null) ? $bridge['rows'] : [];
 $bridgeCount = isset($bridge['count']) ? (int) $bridge['count'] : 0;
+
+// Beban operasional sesi ini (Fase 9). Read-only: seluruhnya dari voucher
+// `operational_expenses` yang belum terserap — operator tidak lagi mengetiknya.
+$opex = is_array($opex ?? null) ? $opex : [];
+$opexRows = is_array($opex['rows'] ?? null) ? $opex['rows'] : [];
+$opexCount = isset($opex['count']) ? (int) $opex['count'] : 0;
 ?>
 <?php if ($error !== null): ?>
     <div class="af-alert af-alert--error" role="alert"><?= Security::e($error) ?></div>
@@ -147,6 +154,115 @@ $bridgeCount = isset($bridge['count']) ? (int) $bridge['count'] : 0;
             <span class="af-num font-semibold text-gold-primary"><?= Security::e($brankas['saldo_label'] ?? '-') ?></span>
         </p>
     </div>
+
+    <!--
+        Beban operasional (Fase 9) — READ-ONLY. Angka ini berasal dari voucher
+        `operational_expenses` yang belum terserap, bukan dari isian operator:
+        itulah yang menutup celah "biaya fiktif" (audit § 8.4).
+    -->
+    <div class="mt-4 rounded-xl border border-surface-800 bg-surface-800/40 p-4">
+        <p class="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-muted">
+            Beban Operasional Terserap (otomatis)
+        </p>
+
+        <?php if ($opexCount === 0): ?>
+            <p class="mt-2 text-xs text-muted">
+                Belum ada beban operasional yang tercatat. Catat dari meja kasir
+                (&ldquo;Catat Beban Kas&rdquo;) saat uang keluar dari laci.
+            </p>
+        <?php else: ?>
+            <ul class="mt-2 divide-y divide-surface-800">
+                <?php foreach ($opexRows as $row): ?>
+                    <li class="py-2">
+                        <div class="flex items-baseline justify-between gap-3">
+                            <p class="truncate text-sm font-semibold text-pure">
+                                <?= Security::e($row['payee'] ?? '') ?>
+                            </p>
+                            <p class="af-num shrink-0 text-sm font-semibold text-red-300">
+                                &minus; <?= Security::e($row['amount_label'] ?? '-') ?>
+                            </p>
+                        </div>
+                        <p class="text-[0.7rem] text-muted">
+                            <?= Security::e($row['category'] ?? '') ?>
+                            &middot; <?= Security::e($row['tanggal'] ?? '-') ?>
+                        </p>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+
+            <p class="mt-3 flex items-baseline justify-between gap-3 border-t border-surface-800 pt-3 text-sm">
+                <span class="text-muted">Total beban sesi ini</span>
+                <span class="af-num font-semibold text-red-300">
+                    &minus; <?= Security::e($opex['total_label'] ?? '-') ?>
+                </span>
+            </p>
+
+            <p class="mt-2 text-[0.7rem] leading-relaxed text-muted">
+                Beban sudah keluar tunai dari kas meja, sehingga alokasi kas menerima
+                pendapatan toko <strong>penuh</strong> (penggantian). Beban hanya mengurangi
+                laba kotor — bagi hasil 80 : 20 dihitung setelahnya.
+            </p>
+        <?php endif; ?>
+    </div>
+
+    <?php
+    // Hak mitra lapangan (Fase 10) — READ-ONLY. Tarif berasal dari basis data,
+    // bonus dari akrual yang belum diserap; nominal potongan dihitung peladen
+    // saat eksekusi (tidak ada isian dari klien, aturan anti-fiktif Fase 9).
+    $officer = is_array($officer ?? null) ? $officer : [];
+    $officerRows = is_array($officer['rows'] ?? null) ? $officer['rows'] : [];
+    $officerBonusRows = is_array($officer['bonus_rows'] ?? null) ? $officer['bonus_rows'] : [];
+    ?>
+    <?php if ((bool) ($officer['has_any'] ?? false)): ?>
+        <div class="mt-4 rounded-xl border border-surface-800 bg-surface-800/40 p-4">
+            <p class="text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-muted">
+                Potongan &amp; Bonus Mitra Lapangan (otomatis)
+            </p>
+
+            <?php if ($officerRows !== []): ?>
+                <ul class="mt-2 divide-y divide-surface-800">
+                    <?php foreach ($officerRows as $row): ?>
+                        <li class="flex items-baseline justify-between gap-3 py-2">
+                            <p class="truncate text-sm font-semibold text-pure">
+                                <?= Security::e($row['name'] ?? '') ?>
+                            </p>
+                            <p class="af-num shrink-0 text-sm font-semibold text-gold-primary">
+                                <?= Security::e($row['pct_label'] ?? '-') ?> &times; laba kotor
+                            </p>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+
+            <?php if ($officerBonusRows !== []): ?>
+                <p class="mt-3 border-t border-surface-800 pt-3 text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-muted">
+                    Bonus akrual yang diserap sesi ini
+                </p>
+                <ul class="mt-1 divide-y divide-surface-800">
+                    <?php foreach ($officerBonusRows as $row): ?>
+                        <li class="flex items-baseline justify-between gap-3 py-2">
+                            <span class="text-xs text-muted"><?= Security::e($row['tanggal'] ?? '-') ?></span>
+                            <span class="af-num shrink-0 text-sm font-semibold text-red-300">
+                                &minus; <?= Security::e($row['amount_label'] ?? '-') ?>
+                            </span>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+                <p class="mt-2 flex items-baseline justify-between gap-3 border-t border-surface-800 pt-2 text-sm">
+                    <span class="text-muted">Total bonus diserap</span>
+                    <span class="af-num font-semibold text-red-300">
+                        &minus; <?= Security::e($officer['bonus_total_label'] ?? '-') ?>
+                    </span>
+                </p>
+            <?php endif; ?>
+
+            <p class="mt-3 text-[0.7rem] leading-relaxed text-muted">
+                Potongan dihitung peladen dari laba kotor sesi ini (nol pada hari minus) dan
+                dicatat sebagai saldo hak petugas. Uangnya <strong>tetap di laci</strong> sampai
+                dicairkan dari layar Mitra Lapangan, sehingga alokasi kas memuatnya.
+            </p>
+        </div>
+    <?php endif; ?>
 
     <?php if ((bool) ($deficit['active'] ?? false)): ?>
         <p class="mt-4 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-200">
@@ -251,23 +367,6 @@ $bridgeCount = isset($bridge['count']) ? (int) $bridge['count'] : 0;
                 </label>
             </div>
 
-            <label class="block">
-                <span class="af-label">Potongan Koordinasi / Aparat Hari Ini</span>
-                <input
-                    x-model.fill="coordFee"
-                    @input="refreshSuggestion()"
-                    type="text"
-                    name="coord_fee"
-                    value="<?= Security::e($coordValue) ?>"
-                    inputmode="numeric"
-                    autocomplete="off"
-                    placeholder="mis. 200.000"
-                    class="af-input af-input--sm"
-                    :class="{ 'opacity-70 cursor-not-allowed': submitting }"
-                    :readonly="submitting"
-                >
-            </label>
-
             <div>
                 <span class="af-label">Bukti Nota Fisik Toko</span>
                 <!--
@@ -313,8 +412,19 @@ $bridgeCount = isset($bridge['count']) ? (int) $bridge['count'] : 0;
                     <dd class="af-num text-pure" x-text="grossLabel">Rp 0</dd>
                 </div>
                 <div class="flex items-baseline justify-between gap-3">
-                    <dt class="text-muted">Beban aparat</dt>
-                    <dd class="af-num text-muted" x-text="coordFeeLabel">- Rp 0</dd>
+                    <dt class="text-muted">Beban operasional</dt>
+                    <dd class="af-num text-muted" x-text="opexFeeLabel">- Rp 0</dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-muted">Bonus akrual mitra lapangan</dt>
+                    <dd class="af-num text-muted" x-text="officerBonusLabel">- Rp 0</dd>
+                </div>
+                <div class="flex items-baseline justify-between gap-3">
+                    <dt class="text-muted">
+                        Potongan mitra lapangan
+                        (<span x-text="officerCount">0</span>)
+                    </dt>
+                    <dd class="af-num text-muted" x-text="officerCutLabel">- Rp 0</dd>
                 </div>
                 <div class="flex items-baseline justify-between gap-3">
                     <dt class="text-muted">Pemulihan defisit</dt>
@@ -409,7 +519,7 @@ $bridgeCount = isset($bridge['count']) ? (int) $bridge['count'] : 0;
                             value="<?= Security::e($kasValue) ?>"
                             inputmode="numeric"
                             autocomplete="off"
-                            placeholder="mis. 35.157.500"
+                            placeholder="mis. 35.357.500"
                             class="af-input af-input--sm"
                             :class="{ 'opacity-70 cursor-not-allowed': submitting }"
                             :readonly="submitting"

@@ -81,10 +81,11 @@ aurumflow/
 │   │   │   SystemSetting.php         # Fase 1-3
 │   │   ├── CapitalWallet / ProfitDistribution / WithdrawalRequest.php   # Fase 4-5
 │   │   ├── BridgeLoan.php            # Dana talangan operasional (Fase 6)
-│   │   └── Miner / MinerLoan / MinerLoanLedger.php   # Buku kasbon petani (Fase 8)
+│   │   ├── Miner / MinerLoan / MinerLoanLedger.php   # Buku kasbon petani (Fase 8)
+│   │   └── OperationalExpense.php    # Voucher beban operasional non-emas (Fase 9)
 │   ├── Services/                     # Use-case bertransaksi (bukan helper murni)
 │   │   ├── TellerService.php         # Kas keluar hulu — tiga tulisan, satu transaksi
-│   │   ├── SettlementService.php     # Tutup buku harian — tujuh kelompok tulisan
+│   │   ├── SettlementService.php     # Tutup buku harian — delapan kelompok tulisan
 │   │   ├── AllocationEngine.php      # Waterfall & pro-rata harian (aritmetika sen integer)
 │   │   ├── CapitalService.php        # Setoran modal, pindah kas, penarikan (Fase 4)
 │   │   ├── OnboardingService.php     # Klaim undangan, kebijakan PIN, teks waiver (Fase 5)
@@ -92,7 +93,8 @@ aurumflow/
 │   │   ├── PinLoginService.php       # Satu pemilik aturan pintu PIN (mitra & kasir, Fase 7)
 │   │   ├── CashierService.php        # Kelola akun kasir: buat, reset PIN, aktif/nonaktif (Fase 7)
 │   │   ├── BridgeLoanService.php     # Fee talangan, penerimaan kas, pengembalian T+1 (Fase 6)
-│   │   └── KasbonService.php         # Kasbon petani: batas harian, pencairan, angsuran FIFO (Fase 8)
+│   │   ├── KasbonService.php         # Kasbon petani: batas harian, pencairan, angsuran FIFO (Fase 8)
+│   │   └── ExpenseService.php        # Beban operasional non-emas: kas keluar + voucher (Fase 9)
 │   ├── Helpers/
 │   │   ├── Security.php              # Sanitasi input, token CSRF, hashing (kata sandi & PIN + pepper)
 │   │   ├── Formatter.php             # Format Rupiah, gramatur 3 desimal, persen
@@ -104,8 +106,8 @@ aurumflow/
 │       │                             # investor.php (Fase 5), report.php (ramah cetak)
 │       ├── auth/                     # Halaman login kata sandi
 │       ├── cashier/                  # Pintu PIN kasir meja bakar (Fase 7)
-│       ├── operator/                 # Meja kasir (+ modal talangan), rekonsiliasi, kelola modal, kelola kasir,
-│       │                             # buku kasbon petani (Fase 8)
+│       ├── operator/                 # Meja kasir (+ modal talangan, + modal beban kas), rekonsiliasi,
+│       │                             # kelola modal, kelola kasir, buku kasbon petani (Fase 8)
 │       └── investor/                 # login (PIN), onboarding (waiver), dashboard (blind), report
 ├── public/                           # FOLDER PUBLIK (Diarahkan ke public_html)
 │   ├── assets/
@@ -158,6 +160,17 @@ aurumflow/
 > modal. `Views/cashier/` adalah permukaan masuk tersendiri (layout `auth`), dan tidak ada
 > berkas investor maupun berkas kas yang tersentuh. Rincian & alasan:
 > `plan/Plan_Fase_7_Kasir_AurumFlow.md`.
+
+> **Catatan penempatan (Fase 9).** `Models/OperationalExpense.php` mengikuti aturan "SQL hanya di
+> `app/Models/`" (termasuk DDL untuk migrasi **M3**), sedangkan
+> `Services/ExpenseService.php` memuat *use-case* beraturan sendiri: mencatat kas keluar non-emas
+> dalam **satu** transaksi (kunci pos kas → cek saldo → mutasi `out` → saldo turun → voucher),
+> pola yang sama dengan `KasbonService`. Tidak ada controller baru: jalurnya
+> `POST /operator/opex/pay` ditangani `TellerController::storeOpex()` supaya daftar izin kasir
+> tetap **dua** controller (`TellerController`, `KasbonController`) dan modalnya hidup di komponen
+> `tellerForm` yang sudah terdaftar. Beban **tidak** menambah tabel penengah pada tutup buku:
+> penyerapannya hanya `UPDATE operational_expenses SET settlement_id`. Rincian & alasan:
+> `plan/Summary_Fase_9_OPEX_AurumFlow.md`.
 
 > **Catatan penempatan (Fase 8).** `KasbonController.php` + `Services/KasbonService.php` memuat
 > use-case buku piutang petani (batas harian, pencairan, angsuran FIFO), sedangkan SQL hidup di
@@ -352,6 +365,40 @@ Aturan ini mencegah peretasan melalui *web shell* jika ada berkas berbahaya yang
   data. Pemilih petani boleh berupa teks label (`miner_id` diisi peramban), dan peladen
   menyelesaikannya lewat `KasbonService::resolveMiner()` dengan empat tingkat: UUID sah →
   label kandidat → nama eksak → `422`.
+
+### 4.8. Buku Hak Mitra Lapangan & Portal Blind (Fase 10)
+
+* **Dua tabel baru, nol `ALTER`.** `officers` (akun buku: `user_id` 1:1, `cut_pct`,
+  `balance_payable`) dan `officer_ledger_entries` (`cut`/`bonus`/`disbursement`,
+  `balance_after`, `cut_pct`/`base_amount` untuk akrual, `register_id`/`mutation_id` untuk
+  pencairan). Nilai ENUM `'officer'` ditambahkan **di ujung** `users.role`. Migrasi lapangan
+  **M4** (`php database/migrate.php`) menjalankan tiga langkah idempoten: ENUM
+  (`User::ensureRoleEnum()`), dua tabel (`Officer::ensureSchema()`), dan kunci
+  `officer_cut_total_cap_pct` (`SystemSetting::ensure()`).
+* **Dua kanal pemotongan laba, masing-masing sekali.** `SettlementService::quote()` menghitung
+  potongan dari `max(0, laba kotor)` via `OfficerService::previewCuts()` (fungsi murni) dan
+  memotong `O + B + C` sebelum pemulihan defisit serta bagi hasil. Potongan dibebankan saat
+  **akrual**; bonus manual dibebankan saat **penyerapan akrual** (`settlement_id` diisi tutup
+  buku berikutnya). Keduanya **bukan** voucher `operational_expenses` — itu akan memotong laba
+  dua kali.
+* **Tutup buku menulis sembilan kelompok tulisan** (tambahan Fase 10: akrual `cut` per petugas +
+  saldo `officers`, dan penyerapan `bonus`). Urutan penguncian global diperluas:
+  `capital_wallets → cash_registers → bridge_loans → miner_loans → hulu_transactions →
+  operational_expenses → officers → officer_ledger_entries (bonus belum terserap) →
+  system_settings`.
+* **Pencairan hak bukan beban.** Satu transaksi: kunci pos kas terpilih (`kas_meja`/`brankas`
+  dari daftar putih — bukan UUID kiriman klien) → kunci baris `officers` → cek saldo hak & saldo
+  pos → mutasi `out` (`Hak petugas: <nama>`) → saldo pos turun → entri `disbursement`
+  (`mutation_id` UNIQUE, satu baris kas = satu baris buku) → saldo hak turun. Laba tidak
+  tersentuh sama sekali.
+* **Komponen.** Model `Officer` + `OfficerLedgerEntry` (SQL & DDL), service `OfficerService`
+  (tata kelola, bonus, pencairan, akrual, pratinjau) + `OfficerPortalService` (baca-saja blind),
+  controller `OfficerController` (Layar G), `OfficerAuthController` (`/officer/login`), dan
+  `OfficerPortalController` (Layar H). Layout baru `layouts/officer.php`.
+* **Isolasi blind bersifat allow-list.** Hanya `/officer/dashboard` dan `/officer/riwayat`
+  (GET, tanpa POST) menerima peran `officer`; seluruh permukaan lain menjawab `302` ke beranda
+  perannya tanpa tulisan. Berkas portal **dilarang** menyentuh istilah pemilik sistem dan
+  **tidak pernah** merender `cut_pct` maupun `base_amount` (tarif × basis = laba kotor).
 
 ---
 

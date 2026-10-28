@@ -1,5 +1,14 @@
 # Summary — Kotak Kosong `/investor/login`: Bootstrap Alpine pada Layout `auth`
 
+> **Status dokumen (pasca-Fase 9 — sinkronisasi dokumentasi).** Seluruh angka dan perilaku di
+> bawah ini — termasuk (bila ada) penyebutan **13 tabel** atau kurang, **14 suite / 853
+> assertion**, `CACHE_NAME` **v3**, dan isian **`coord_fee`** — adalah **potret fase tersebut**,
+> bukan keadaan sekarang. Keadaan terkini: **14 tabel** (termasuk `operational_expenses`, nol `ALTER`),
+> `CACHE_NAME` **`aurumflow-shell-v4`**, **15 suite / 900 assertion / 0 gagal**, beban operasional
+> dicatat sebagai **voucher kas** di meja kasir lalu diserap otomatis oleh tutup buku
+> (`total_cash = pendapatan`). Rujukan terkini: `plan/Summary_Fase_9_OPEX_AurumFlow.md`.
+
+
 > **Laporan eksekusi perbaikan.** Menindaklanjuti `plan/Audit_Investor_Login_Empty_Box.md`
 > (investigasi baca-saja, disetujui) — paket yang dijalankan: **Opsi A + Opsi B1 + penjaga regresi § 6.2 & § 6.3**.
 > Proyek: **AurumFlow** · Cakupan: `app/Views/layouts/auth.php`, `app/Views/investor/login.php`,

@@ -139,16 +139,21 @@ final class InvestorOnboardingController extends BaseController
      * Halaman ini memang **publik** — otorisasinya adalah token undangan 64
      * heksadesimal, bukan sesi. Namun halaman ini menampilkan data calon mitra
      * (nama & nomor telepon), dan itu termasuk "data investor" yang wajib
-     * tertutup bagi kasir. Karena itu sesi kasir diarahkan ke beranda perannya
-     * **sebelum** token dibaca: tidak ada data mitra yang dirender dan tidak ada
-     * PIN yang dapat ditetapkan lewat sesi kasir. Pengunjung anonim dan mitra
-     * (mis. sesi lama) tidak terpengaruh — perilaku Fase 5 tetap utuh.
+     * tertutup bagi staf. Karena itu sesi **selain mitra** (kasir, mitra
+     * lapangan, pengelola) diarahkan ke beranda perannya **sebelum** token
+     * dibaca: tidak ada data mitra yang dirender dan tidak ada PIN yang dapat
+     * ditetapkan lewat sesi staf. Pengunjung anonim dan mitra (mis. sesi lama)
+     * tidak terpengaruh — perilaku Fase 5 tetap utuh.
      */
     private function refuseCashier(): void
     {
-        if ((string) ($_SESSION['user_role'] ?? '') === Constants::ROLE_CASHIER) {
-            $this->redirect(self::roleLandingPath(Constants::ROLE_CASHIER));
+        $role = (string) ($_SESSION['user_role'] ?? '');
+
+        if ($role === '' || $role === Constants::ROLE_INVESTOR) {
+            return;
         }
+
+        $this->redirect(self::roleLandingPath($role));
     }
 
     /**

@@ -1,5 +1,14 @@
 # Summary Unify UI AurumFlow — Kerangka 2-Tier Pengelola
 
+> **Status dokumen (pasca-Fase 9 — sinkronisasi dokumentasi).** Seluruh angka dan perilaku di
+> bawah ini — termasuk (bila ada) penyebutan **13 tabel** atau kurang, **14 suite / 853
+> assertion**, `CACHE_NAME` **v3**, dan isian **`coord_fee`** — adalah **potret fase tersebut**,
+> bukan keadaan sekarang. Keadaan terkini: **14 tabel** (termasuk `operational_expenses`, nol `ALTER`),
+> `CACHE_NAME` **`aurumflow-shell-v4`**, **15 suite / 900 assertion / 0 gagal**, beban operasional
+> dicatat sebagai **voucher kas** di meja kasir lalu diserap otomatis oleh tutup buku
+> (`total_cash = pendapatan`). Rujukan terkini: `plan/Summary_Fase_9_OPEX_AurumFlow.md`.
+
+
 Laporan eksekusi untuk `plan/Plan_Unify_UI_AurumFlow.md` (keputusan PO:
 `dec-9ab922a185e7cc38`, `dec-e6acc8117bba9602`).
 

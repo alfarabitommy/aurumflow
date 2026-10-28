@@ -73,6 +73,26 @@ $bridgeFeeType = isset($bridgeInput['fee_type']) && (string) $bridgeInput['fee_t
 $pctChecked = $bridgeFeeType === 'pct' ? 'checked' : '';
 $fixedChecked = $bridgeFeeType === 'fixed' ? 'checked' : '';
 
+// Beban operasional (Fase 9): kategori, isian yang dikembalikan peladen pada
+// jalur gagal validasi (422), dan alasan penolakan.
+$opex = is_array($opex ?? null) ? $opex : [];
+$opexCategories = is_array($opex['categories'] ?? null) ? $opex['categories'] : [];
+$opexInput = is_array($opex['input'] ?? null) ? $opex['input'] : [];
+$opexError = isset($opex['error']) && is_string($opex['error']) && $opex['error'] !== '' ? $opex['error'] : null;
+
+$opexCategoryValue = isset($opexInput['category']) && is_string($opexInput['category'])
+    ? $opexInput['category']
+    : 'coordination';
+$opexPayeeValue = isset($opexInput['payee_name']) && is_string($opexInput['payee_name'])
+    ? $opexInput['payee_name']
+    : '';
+$opexAmountValue = isset($opexInput['amount']) && is_string($opexInput['amount'])
+    ? $opexInput['amount']
+    : '';
+$opexNotesValue = isset($opexInput['notes']) && is_string($opexInput['notes'])
+    ? $opexInput['notes']
+    : '';
+
 // Konfigurasi Alpine.js disiapkan TellerController (integer & boolean dari
 // kode kita sendiri). Dicetak lewat Security::e() seperti output dinamis lain.
 $alpineConfig = isset($alpineConfig) && is_string($alpineConfig) ? $alpineConfig : '{}';
@@ -332,6 +352,27 @@ $checkedAttribute = $applyFee ? 'checked' : '';
     </section>
 
     <section class="af-card mt-5">
+        <h2 class="af-card__title">Beban Operasional</h2>
+        <p class="af-card__subtitle">
+            Kas keluar non-emas: koordinasi lapangan, pengamanan wilayah, konsumsi/gas.
+        </p>
+
+        <p class="mt-3 text-[0.7rem] leading-relaxed text-muted">
+            Beban langsung mengurangi saldo kas meja dan menjadi pengurang laba kotor pada
+            tutup buku berikutnya. Nominal yang sudah tercatat tidak dapat diubah — periksa
+            sebelum menyimpan.
+        </p>
+
+        <button
+            type="button"
+            class="af-btn af-btn--ghost af-btn--block mt-4"
+            @click="opexOpen = true"
+        >
+            &minus; Catat Beban Kas
+        </button>
+    </section>
+
+    <section class="af-card mt-5">
         <h2 class="af-card__title">3 Transaksi Terakhir</h2>
         <p class="af-card__subtitle">Riwayat pada pos <?= Security::e($register['name'] ?? 'kas meja') ?>.</p>
 
@@ -557,6 +598,151 @@ $checkedAttribute = $applyFee ? 'checked' : '';
                         :disabled="!bridgeSubmitReady"
                     >
                         Terima &amp; Catat Kas Masuk
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!--
+        Modal "Catat Beban Kas" (Fase 9 — OPEX non-emas). Berada di dalam akar
+        `x-data="tellerForm(…)"` yang sama, memakai KOMPONEN YANG SUDAH ADA —
+        bukan `Alpine.data()` baru — supaya aset `app.js` yang di-cache peramban
+        tidak dapat membuat modalnya hilang (pelajaran Fase 6). `x-cloak`
+        menjaganya tetap tersembunyi bila Alpine gagal dimuat.
+    -->
+    <div
+        x-cloak
+        x-show="opexOpen"
+        class="fixed inset-0 z-30 overflow-y-auto bg-obsidian-950/85 px-4 py-6 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="af-opex-title"
+        @click.self="opexOpen = false"
+    >
+        <div class="af-card mx-auto mt-6 max-w-md">
+            <div class="flex items-start justify-between gap-3">
+                <h2 id="af-opex-title" class="af-card__title">Catat Beban Kas</h2>
+                <button
+                    type="button"
+                    class="af-btn af-btn--ghost px-3 text-xs"
+                    @click="opexOpen = false"
+                >
+                    Tutup
+                </button>
+            </div>
+            <p class="af-card__subtitle">
+                Kas keluar tunai dari laci untuk beban operasional non-emas.
+            </p>
+
+            <?php if ($opexError !== null): ?>
+                <div class="af-alert af-alert--error mt-3" role="alert"><?= Security::e($opexError) ?></div>
+            <?php endif; ?>
+
+            <form
+                method="post"
+                action="<?= Security::e(App::url('operator/opex/pay')) ?>"
+                class="mt-4 grid gap-4"
+                novalidate
+                @submit="opexSubmitting = true"
+            >
+                <?= Security::csrfField() ?>
+                <input type="hidden" name="<?= Security::e(Security::FORM_FIELD) ?>" value="<?= Security::e($formToken) ?>">
+
+                <label class="block">
+                    <span class="af-label">Kategori Beban</span>
+                    <!--
+                        `select` tidak mengenal `readonly`; yang WAJIB hanya
+                        "jangan pernah disabled" — kontrol `disabled` dikeluarkan
+                        peramban dari data form sehingga kategori tidak terkirim.
+                    -->
+                    <select
+                        name="opex_category"
+                        x-model="opexCategory"
+                        class="af-input af-input--sm"
+                        :class="{ 'opacity-70 cursor-not-allowed': opexSubmitting }"
+                    >
+                        <?php foreach ($opexCategories as $category): ?>
+                            <option
+                                value="<?= Security::e($category['value'] ?? '') ?>"
+                                <?= (string) ($category['value'] ?? '') === $opexCategoryValue ? 'selected' : '' ?>
+                            ><?= Security::e($category['label'] ?? '') ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+
+                <label class="block">
+                    <span class="af-label">Nama Penerima</span>
+                    <input
+                        type="text"
+                        name="opex_payee"
+                        x-model.fill="opexPayee"
+                        value="<?= Security::e($opexPayeeValue) ?>"
+                        maxlength="100"
+                        autocomplete="off"
+                        placeholder="mis. Pak RT / Petugas Jaga"
+                        class="af-input"
+                        :class="{ 'opacity-70 cursor-not-allowed': opexSubmitting }"
+                        :readonly="opexSubmitting"
+                    >
+                </label>
+
+                <label class="block">
+                    <span class="af-label">Nominal Tunai (Rp)</span>
+                    <input
+                        type="text"
+                        name="opex_amount"
+                        x-model.fill="opexAmount"
+                        value="<?= Security::e($opexAmountValue) ?>"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        placeholder="mis. 200.000"
+                        class="af-input"
+                        :class="{ 'opacity-70 cursor-not-allowed': opexSubmitting }"
+                        :readonly="opexSubmitting"
+                    >
+                    <span class="mt-1 block text-[0.7rem] text-muted">
+                        Satu pemisah ribuan dengan titik, desimal dengan koma. Contoh:
+                        <span class="af-num">200.000</span>
+                    </span>
+                </label>
+
+                <label class="block">
+                    <span class="af-label">Catatan (opsional)</span>
+                    <input
+                        type="text"
+                        name="opex_notes"
+                        x-model.fill="opexNotes"
+                        value="<?= Security::e($opexNotesValue) ?>"
+                        maxlength="255"
+                        autocomplete="off"
+                        placeholder="mis. koordinasi malam, 2 petugas"
+                        class="af-input af-input--sm"
+                        :class="{ 'opacity-70 cursor-not-allowed': opexSubmitting }"
+                        :readonly="opexSubmitting"
+                    >
+                </label>
+
+                <p class="text-[0.7rem] leading-relaxed text-muted">
+                    Beban ini mengurangi saldo kas meja <strong>dan</strong> laba kotor tutup buku
+                    berikutnya. Mitra pemodal hanya menerima bagian dari laba setelah beban
+                    (PRD § 3.3).
+                </p>
+
+                <div class="grid gap-2 sm:grid-cols-2">
+                    <button
+                        type="button"
+                        class="af-btn af-btn--ghost af-btn--block"
+                        @click="opexOpen = false"
+                    >
+                        Batal
+                    </button>
+                    <button
+                        type="submit"
+                        class="af-btn af-btn--primary af-btn--block"
+                        :disabled="!opexSubmitReady"
+                    >
+                        Catat Beban &amp; Kurangi Kas
                     </button>
                 </div>
             </form>

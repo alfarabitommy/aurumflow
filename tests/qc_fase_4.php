@@ -43,6 +43,7 @@ use AurumFlow\Helpers\Security;
 use AurumFlow\Models\CapitalWallet;
 use AurumFlow\Models\CashMutation;
 use AurumFlow\Models\CashRegister;
+use AurumFlow\Models\OperationalExpense;
 use AurumFlow\Models\ProfitDistribution;
 use AurumFlow\Models\SystemSetting;
 use AurumFlow\Models\User;
@@ -1158,6 +1159,14 @@ $settlementIdsBefore = array_map(
     Database::fetchAll('SELECT `id` FROM `daily_settlements`')
 );
 
+// Sejak Fase 9 beban TIDAK lagi dikirim lewat form: voucher kas Rp 200.000
+// inilah yang diserap sesi tutup buku sebagai pengurang laba kotor.
+QcFixture::seedOpexVoucher([
+    'category'   => OperationalExpense::CATEGORY_COORDINATION,
+    'payee_name' => 'Aparat QC 4',
+    'amount'     => '200.000',
+]);
+
 $settlementPost = QcHttp::request('POST', '/operator/settlement', [
     'cookie_jar' => $operatorJar,
     'data'       => [
@@ -1269,6 +1278,12 @@ Qc::ok(
 $fixtureLoss = QcFixture::resetSingleHoldingState('1,000', '1.950.000');
 $walletsLoss = QcFixture::seedQcWallets();
 $tellerLoss = (string) $fixtureLoss['teller_id'];
+
+QcFixture::seedOpexVoucher([
+    'category'   => OperationalExpense::CATEGORY_COORDINATION,
+    'payee_name' => 'Aparat QC 4 (minus)',
+    'amount'     => '200.000',
+]);
 
 $lossPage = QcHttp::request('GET', '/operator/settlement', ['cookie_jar' => $operatorJar]);
 $lossPost = QcHttp::request('POST', '/operator/settlement', [

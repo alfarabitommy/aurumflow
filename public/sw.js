@@ -32,7 +32,7 @@
 
 'use strict';
 
-var CACHE_NAME = 'aurumflow-shell-v3';
+var CACHE_NAME = 'aurumflow-shell-v5';
 
 /* Daftar-putih aset statis — relatif terhadap scope service worker. */
 var SHELL = [

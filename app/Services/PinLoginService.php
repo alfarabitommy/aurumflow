@@ -46,6 +46,7 @@ final class PinLoginService
     private const AUDIENCE_LABELS = [
         Constants::ROLE_INVESTOR => 'mitra',
         Constants::ROLE_CASHIER  => 'kasir',
+        Constants::ROLE_OFFICER  => 'petugas lapangan',
     ];
 
     private function __construct()

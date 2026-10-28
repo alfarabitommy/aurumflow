@@ -272,6 +272,7 @@ function settlementComponent(bridgeFeeCents, bridgeCount) {
         holding_mg: 18050,
         holding_cost_cents: 3515750000,
         active_deficit_cents: 0,
+        opex_fee_cents: 20000000,
         bridge_fee_cents: bridgeFeeCents,
         bridge_count: bridgeCount,
         receipt_soft_bytes: 256000,
@@ -280,7 +281,6 @@ function settlementComponent(bridgeFeeCents, bridgeCount) {
         sold_grams: field('18,050'),
         density_pct: field('93,50'),
         shop_price_per_g: field('2.080.000'),
-        coord_fee: field('200.000'),
         kas_split: field(''),
         brankas_split: field(''),
     });
@@ -359,11 +359,12 @@ function alpineEval(scope, expression) {
     return new Function('__scope__', 'with (__scope__) { return (' + expression + ') }')(scope);
 }
 
-function settlementComponentWithFields(sold, density, price, coord, bridgeFee, bridgeCount) {
+function settlementComponentWithFields(sold, density, price, opexCents, bridgeFee, bridgeCount) {
     const component = buildComponent('settlementForm', {
         holding_mg: 18050,
         holding_cost_cents: 3515750000,
         active_deficit_cents: 0,
+        opex_fee_cents: opexCents,
         bridge_fee_cents: bridgeFee,
         bridge_count: bridgeCount,
         receipt_soft_bytes: 256000,
@@ -372,7 +373,6 @@ function settlementComponentWithFields(sold, density, price, coord, bridgeFee, b
         sold_grams: field(sold),
         density_pct: field(density),
         shop_price_per_g: field(price),
-        coord_fee: field(coord),
         kas_split: field(''),
         brankas_split: field(''),
     });
@@ -404,14 +404,14 @@ check('regresi UI: baris fee tidak memakai kondisi peringatan',
     /bridgeWarnUncovered|bridgeHasUncovered/.test(String(feeRowExpr)), false);
 
 const uiStates = [
-    // [label, gram, kadar, harga, aparat, peringatan-diharapkan]
-    ['kosong', '', '', '', '', false],
-    ['hari sehat', '18,050', '93,50', '2.080.000', '200.000', false],
-    ['hari minus', '18,050', '93,50', '1.900.000', '200.000', true],
+    // [label, gram, kadar, harga, beban-OPEX (sen), peringatan-diharapkan]
+    ['kosong', '', '', '', 0, false],
+    ['hari sehat', '18,050', '93,50', '2.080.000', 20000000, false],
+    ['hari minus', '18,050', '93,50', '1.900.000', 20000000, true],
 ];
 
-uiStates.forEach(([label, sold, density, price, coord, warnExpected]) => {
-    const scope = settlementComponentWithFields(sold, density, price, coord, 10000000, 1);
+uiStates.forEach(([label, sold, density, price, opexCents, warnExpected]) => {
+    const scope = settlementComponentWithFields(sold, density, price, opexCents, 10000000, 1);
 
     check('regresi UI [' + label + ']: baris fee tetap tampil',
         alpineEval(scope, String(feeRowExpr)), true);
@@ -422,14 +422,14 @@ uiStates.forEach(([label, sold, density, price, coord, warnExpected]) => {
 });
 
 // Nilai yang ditampilkan pada hari sehat harus terisi (bukan placeholder Rp 0).
-const healthy = settlementComponentWithFields('18,050', '93,50', '2.080.000', '200.000', 10000000, 1);
+const healthy = settlementComponentWithFields('18,050', '93,50', '2.080.000', 20000000, 10000000, 1);
 
 check('regresi UI: nilai baris fee pada hari sehat', healthy.bridgeFeeLabel, '- Rp 100.000');
 check('regresi UI: nilai hak pengelola bersih pada hari sehat', healthy.operatorTakeHomeLabel, 'Rp 1.649.200');
 check('regresi UI: pool mitra tidak tersentuh fee', healthy.poolLabel, 'Rp 437.300');
 
 // Tanpa talangan aktif: baris disembunyikan (kondisi tetap satu pemilik).
-const none = settlementComponentWithFields('18,050', '93,50', '2.080.000', '200.000', 0, 0);
+const none = settlementComponentWithFields('18,050', '93,50', '2.080.000', 20000000, 0, 0);
 
 check('regresi UI: tanpa talangan baris fee disembunyikan',
     alpineEval(none, String(feeRowExpr)), false);

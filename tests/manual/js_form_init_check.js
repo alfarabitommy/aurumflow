@@ -153,15 +153,16 @@ function check(label, actual, expected) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Muat pertama: nilai dari peladen (sold_grams 18,050 / coord_fee 200.000),
-//    kadar & harga masih kosong, dua alokasi kosong (= "pakai saran sistem").
+// 1. Muat pertama: nilai dari peladen (sold_grams 18,050 / beban OPEX
+//    Rp 200.000 lewat konfigurasi), kadar & harga masih kosong, dua alokasi
+//    kosong (= "pakai saran sistem"). Sejak Fase 9 beban TIDAK lagi berupa
+//    isian `coord_fee`: nilainya datang dari peladen (`opex_fee_cents`).
 // ---------------------------------------------------------------------------
 
 const initialFields = {
     sold_grams: field('18,050'),
     density_pct: field(''),
     shop_price_per_g: field(''),
-    coord_fee: field('200.000'),
     kas_split: field(''),
     brankas_split: field(''),
 };
@@ -170,6 +171,7 @@ const settlement = buildComponent('settlementForm', {
     holding_mg: 18050,
     holding_cost_cents: 3515750000,
     active_deficit_cents: 0,
+    opex_fee_cents: 20000000,
     receipt_soft_bytes: 256000,
     receipt_hard_bytes: 4194304,
 }, initialFields);
@@ -178,7 +180,8 @@ settlement.init();
 
 check('lama: sold_grams lewat $refs', legacyValue(settlement.$refs, 'sold_grams'), '');
 check('baru: soldGrams', settlement.soldGrams, '18,050');
-check('baru: coordFee', settlement.coordFee, '200.000');
+check('baru: beban OPEX dari peladen', settlement.opexFeeCents, 20000000);
+check('baru: tidak ada lagi isian coord_fee', settlement.coordFee, undefined);
 check('baru: densityPercent', settlement.densityPercent, '');
 check('baru: shopPrice', settlement.shopPrice, '');
 check('baru: saran kas terisi otomatis', settlement.kasInput, '0');
@@ -190,7 +193,6 @@ const pricedFields = {
     sold_grams: field('18,050'),
     density_pct: field('93,50'),
     shop_price_per_g: field('2.080.000'),
-    coord_fee: field('200.000'),
     kas_split: field(''),
     brankas_split: field(''),
 };
@@ -199,6 +201,7 @@ const priced = buildComponent('settlementForm', {
     holding_mg: 18050,
     holding_cost_cents: 3515750000,
     active_deficit_cents: 0,
+    opex_fee_cents: 20000000,
 }, pricedFields);
 
 priced.init();
@@ -207,8 +210,8 @@ check('pratinjau: pendapatan', priced.revenueLabel, 'Rp 37.544.000');
 check('pratinjau: laba bersih', priced.netLabel, 'Rp 2.186.500');
 check('pratinjau: hak pengelola 80%', priced.operatorLabel, 'Rp 1.749.200');
 check('pratinjau: pool investor 20%', priced.poolLabel, 'Rp 437.300');
-check('pratinjau: total kas fisik', priced.totalCashLabel, 'Rp 37.344.000');
-check('pratinjau: alokasi saran meja', priced.suggestedKasLabel, 'Rp 35.157.500');
+check('pratinjau: total kas fisik (Fase 9: pendapatan penuh)', priced.totalCashLabel, 'Rp 37.544.000');
+check('pratinjau: alokasi saran meja (modal + beban)', priced.suggestedKasLabel, 'Rp 35.357.500');
 check('pratinjau: alokasi saran brankas', priced.suggestedBrankasLabel, 'Rp 2.186.500');
 check('tombol submit aktif dengan nota', (priced.receiptReady = true, priced.canSubmit), true);
 
@@ -221,7 +224,6 @@ const echoFields = {
     sold_grams: field('18,000'),
     density_pct: field('93,50'),
     shop_price_per_g: field('2.080.000'),
-    coord_fee: field('200.000'),
     kas_split: field('30.000.000'),
     brankas_split: field('6.000.000'),
 };
@@ -230,6 +232,7 @@ const echoed = buildComponent('settlementForm', {
     holding_mg: 18050,
     holding_cost_cents: 3515750000,
     active_deficit_cents: 0,
+    opex_fee_cents: 20000000,
 }, echoFields);
 
 echoed.init();
@@ -305,7 +308,7 @@ check('submit: flag submitting menyala', priced.submitting, true);
 check('submit: berat tetap di model', priced.soldGrams, '18,050');
 check('submit: kadar tetap di model', priced.densityPercent, '93,50');
 check('submit: harga tetap di model', priced.shopPrice, '2.080.000');
-check('submit: beban aparat tetap di model', priced.coordFee, '200.000');
+check('submit: beban OPEX tetap di model', priced.opexFeeCents, 20000000);
 check('submit: alokasi tetap terisi', priced.kasInput !== '' && priced.brankasInput !== '', true);
 
 tellerEcho.confirm();

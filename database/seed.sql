@@ -79,3 +79,16 @@ INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`)
 SELECT 'daily_loan_limit', '500000.00', 'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)'
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM `system_settings` WHERE `setting_key` = 'daily_loan_limit');
+
+-- ----------------------------------------------------------------------------
+-- officer_cut_total_cap_pct — batas Σ potongan mitra lapangan (Fase 10)
+-- ----------------------------------------------------------------------------
+-- Batas atas penjumlahan `officers.cut_pct` seluruh petugas aktif. Nilai 100,00
+-- berarti seluruh laba kotor boleh habis menjadi hak petugas (kebijakan D-2);
+-- nilai lebih kecil menjaga agar potongan tidak pernah melampaui batas tersebut.
+-- Nilai rusak/negatif ditolak peladen dengan pesan (fail-closed), bukan
+-- dianggap tak terbatas.
+INSERT INTO `system_settings` (`setting_key`, `setting_value`, `description`)
+SELECT 'officer_cut_total_cap_pct', '100.00', 'Batas atas jumlah persentase potongan seluruh mitra lapangan aktif (%)'
+FROM DUAL
+WHERE NOT EXISTS (SELECT 1 FROM `system_settings` WHERE `setting_key` = 'officer_cut_total_cap_pct');

@@ -11,6 +11,7 @@ use AurumFlow\Helpers\Security;
 use AurumFlow\Models\CashRegister;
 use AurumFlow\Models\DailySettlement;
 use AurumFlow\Models\HuluTransaction;
+use AurumFlow\Models\OperationalExpense;
 use AurumFlow\Models\SystemSetting;
 use AurumFlow\Services\BridgeLoanService;
 use AurumFlow\Services\SettlementService;
@@ -25,9 +26,9 @@ use AurumFlow\Services\TellerService;
  *   2. CSRF diperiksa DUA kali (front controller + di sini) dan token
  *      sekali-pakai `_once` mencegah satu sesi tutup buku tercatat dua kali.
  *   3. Nominal TIDAK PERNAH dipercaya dari klien: yang dibaca dari form hanya
- *      berat jual, kadar, harga jual, beban aparat, dua alokasi kas, dan foto
- *      nota. Pendapatan, modal belanja hulu, laba, bagi hasil, dan total
- *      alokasi dihitung ulang `SettlementService`.
+ *      berat jual, kadar, harga jual, dua alokasi kas, dan foto nota.
+ *      Pendapatan, modal belanja hulu, beban operasional (dari voucher OPEX),
+ *      laba, bagi hasil, dan total alokasi dihitung ulang `SettlementService`.
  *   4. Sukses memakai POST-Redirect-GET; gagal validasi mengembalikan 422
  *      beserta isian form supaya operator tidak mengetik ulang.
  */
@@ -38,13 +39,6 @@ final class SettlementController extends BaseController
     private const LAYOUT = 'operator';
 
     private const ROUTE = '/operator/settlement';
-
-    /**
-     * Saran beban aparat harian (PRD § 3.3: Rp 5.000.000/bulan ≈ Rp 200.000
-     * per hari operasional). Angka ini hanya NILAI AWAL form — parameternya
-     * tetap milik operator, bukan kunci `system_settings` baru (item O-2).
-     */
-    private const COORD_FEE_FIELD = '200.000';
 
     /**
      * Layar rekonsiliasi (GET).
@@ -139,11 +133,49 @@ final class SettlementController extends BaseController
                 Formatter::rupiah($result['teller_after']),
                 Formatter::rupiah($result['brankas_after']),
                 self::allocationSuffix($allocation, $quote),
-                self::bridgeSuffix($bridge, $quote)
+                self::bridgeSuffix($bridge, $quote),
+                self::officerSuffix($quote)
             )
         );
 
         $this->redirect(self::ROUTE);
+    }
+
+    /**
+     * Keterangan tambahan pada pesan sukses: hak mitra lapangan (Fase 10).
+     *
+     * Menyebut potongan sesi ini dan bonus yang diserap — keduanya sudah
+     * mengurangi laba bersih dan uangnya tertahan di laci sampai dicairkan.
+     *
+     * @param array<string, mixed> $quote
+     */
+    private static function officerSuffix(array $quote): string
+    {
+        $count = (int) ($quote['officer_count'] ?? 0);
+        $bonusCents = (int) ($quote['officer_bonus_cents'] ?? 0);
+
+        if ($count <= 0 && $bonusCents <= 0) {
+            return '';
+        }
+
+        $suffix = '';
+
+        if ($count > 0) {
+            $suffix .= sprintf(
+                ' Potongan %d mitra lapangan %s dicatat sebagai saldo hak.',
+                $count,
+                Formatter::rupiah((string) $quote['officer_cut'])
+            );
+        }
+
+        if ($bonusCents > 0) {
+            $suffix .= sprintf(
+                ' Bonus akrual %s diserap sesi ini.',
+                Formatter::rupiah((string) $quote['officer_bonus'])
+            );
+        }
+
+        return $suffix . ' Uangnya tetap di laci sampai dicairkan dari layar Mitra Lapangan.';
     }
 
     /**
@@ -241,15 +273,71 @@ final class SettlementController extends BaseController
         // Konfigurasi Alpine.js: HANYA integer dari kode kita sendiri (tidak
         // pernah teks kiriman pengguna), tetap dicetak lewat Security::e()
         // supaya aturan "tidak ada output dinamis tanpa escaping" seragam.
+        //
+        // Fase 10: pratinjau potongan memakai daftar tarif (perseratus persen)
+        // dari peladen + total akrual bonus yang belum terserap. Perhitungannya
+        // cermin `OfficerService::previewCuts()`; angkanya tetap dihitung ulang
+        // peladen saat POST.
+        $officerPcts = [];
+
+        foreach ($context['officers'] as $officerRow) {
+            $officerPcts[] = (int) $officerRow['pct_hundredths'];
+        }
+
         $alpineConfig = json_encode([
             'holding_mg'            => $context['holding_mg'],
             'holding_cost_cents'    => $context['holding_cost_cents'],
             'active_deficit_cents'  => $context['active_deficit_cents'],
+            'opex_fee_cents'        => $context['coord_fee_cents'],
             'bridge_fee_cents'      => TellerService::moneyToCents($bridgeTotals['fee']),
             'bridge_count'          => $bridgeTotals['count'],
+            'officer_pcts'          => $officerPcts,
+            'officer_bonus_cents'   => $context['officer_bonus_cents'],
             'receipt_soft_bytes'    => SettlementService::RECEIPT_SOFT_LIMIT_BYTES,
             'receipt_hard_bytes'    => SettlementService::RECEIPT_HARD_LIMIT_BYTES,
         ], JSON_THROW_ON_ERROR);
+
+        // Hak mitra lapangan (Fase 10) — READ-ONLY. Tarif & daftar bonus berasal
+        // dari basis data; potongan nominalnya dihitung peladen saat eksekusi.
+        $officerViewRows = [];
+
+        foreach ($context['officers'] as $officerRow) {
+            $officerViewRows[] = [
+                'name'       => (string) ($officerRow['name'] ?? ''),
+                'pct_label'  => Formatter::persen((string) ($officerRow['pct'] ?? '0.00')),
+            ];
+        }
+
+        $bonusViewRows = [];
+
+        foreach ($context['open_officer_bonuses'] as $bonusRow) {
+            $bonusViewRows[] = [
+                'tanggal'      => Formatter::tanggalId((string) ($bonusRow['created_at'] ?? ''), false),
+                'amount_label' => Formatter::rupiah($bonusRow['amount'] ?? 0),
+            ];
+        }
+
+        $officerView = [
+            'rows'              => $officerViewRows,
+            'count'             => count($officerViewRows),
+            'bonus_rows'        => $bonusViewRows,
+            'bonus_count'       => count($bonusViewRows),
+            'bonus_total_label' => Formatter::rupiah(TellerService::centsToDecimal($context['officer_bonus_cents'])),
+            'has_any'           => $officerViewRows !== [] || $bonusViewRows !== [],
+        ];
+
+        // Beban operasional yang akan diserap sesi ini (Fase 9) — read-only,
+        // seluruhnya dari voucher `operational_expenses` yang belum terserap.
+        $opexRows = [];
+
+        foreach ($context['open_expenses'] as $row) {
+            $opexRows[] = [
+                'payee'       => (string) ($row['payee_name'] ?? ''),
+                'category'    => OperationalExpense::categoryLabel((string) ($row['category'] ?? '')),
+                'tanggal'     => Formatter::tanggalId((string) ($row['expense_date'] ?? ''), false),
+                'amount_label' => Formatter::rupiah($row['amount'] ?? 0),
+            ];
+        }
 
         $latest = DailySettlement::latest(1);
 
@@ -297,6 +385,22 @@ final class SettlementController extends BaseController
 
             'bridge' => $bridgeView,
 
+            // Hak mitra lapangan (Fase 10): daftar tarif + akrual bonus yang
+            // akan diserap. Read-only — tidak ada isian dari klien.
+            'officer' => $officerView,
+
+            // Beban operasional (Fase 9): daftar voucher yang akan diserap +
+            // totalnya. Read-only — operator tidak lagi mengetik beban.
+            'opex' => [
+                'rows'        => $opexRows,
+                'count'       => count($opexRows),
+                'total_label' => Formatter::rupiah(TellerService::centsToDecimal($context['coord_fee_cents'])),
+                'consumable_label' => Formatter::rupiah(
+                    TellerService::centsToDecimal($context['consumable_opex_cents'])
+                ),
+                'has_consumable' => $context['consumable_opex_cents'] > 0,
+            ],
+
             'todayCount' => DailySettlement::countForDate(date('Y-m-d')),
 
             'lastSettlement' => $latest === [] ? null : [
@@ -319,11 +423,13 @@ final class SettlementController extends BaseController
     /**
      * Nilai awal form saat halaman pertama dibuka.
      *
-     * Berat jual diisi total emas `holding` (saran, tetap boleh diubah) dan
-     * beban aparat memakai asumsi PRD. Kadar, harga, serta dua alokasi kas
-     * dibiarkan kosong: dua alokasi yang kosong berarti "pakai saran sistem"
-     * (lihat `SettlementService::quote()`), sehingga form tetap benar walau
-     * JavaScript mati.
+     * Berat jual diisi total emas `holding` (saran, tetap boleh diubah). Kadar,
+     * harga, serta dua alokasi kas dibiarkan kosong: dua alokasi yang kosong
+     * berarti "pakai saran sistem" (lihat `SettlementService::quote()`),
+     * sehingga form tetap benar walau JavaScript mati.
+     *
+     * Sejak Fase 9 TIDAK ada lagi isian beban aparat: nilainya diturunkan
+     * peladen dari voucher `operational_expenses` yang belum terserap.
      *
      * @return array<string, string>
      */
@@ -335,7 +441,6 @@ final class SettlementController extends BaseController
             'sold_grams'       => self::gramFieldValue($totals['grams']),
             'density_pct'      => '',
             'shop_price_per_g' => '',
-            'coord_fee'        => self::COORD_FEE_FIELD,
             'kas_split'        => '',
             'brankas_split'    => '',
         ];
@@ -343,6 +448,11 @@ final class SettlementController extends BaseController
 
     /**
      * Baca input form (tanpa satu pun nominal hasil hitung dari klien).
+     *
+     * `coord_fee` sengaja TIDAK dibaca lagi (Fase 9): beban operasional berasal
+     * dari voucher, bukan dari isian. Membacanya kembali akan membuka celah
+     * "biaya fiktif" — menaikkan beban menurunkan laba sementara `kas` tetap
+     * menerima pendapatan penuh, sehingga uang tertahan di laci.
      *
      * @return array<string, string>
      */
@@ -352,7 +462,6 @@ final class SettlementController extends BaseController
             'sold_grams'       => self::post('sold_grams'),
             'density_pct'      => self::post('density_pct'),
             'shop_price_per_g' => self::post('shop_price_per_g'),
-            'coord_fee'        => self::post('coord_fee'),
             'kas_split'        => self::post('kas_split'),
             'brankas_split'    => self::post('brankas_split'),
         ];

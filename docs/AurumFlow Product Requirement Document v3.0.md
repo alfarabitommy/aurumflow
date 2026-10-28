@@ -24,10 +24,10 @@ AurumFlow dirancang khusus untuk mengelola operasional harian perdagangan dan pe
 
 ## 2. Struktur Pengguna & Hak Akses (*Role-Based Permissions*)
 
-Sejak Fase 7 ada **tiga** peran (`users.role`): `operator` (Pengelola/Pemilik), `investor` (Mitra Pemodal), dan `cashier` (Kasir Meja Bakar — staf lapangan). Setiap peran punya pintu masuk kredensialnya sendiri dan **tidak** dapat memakai pintu peran lain.
+Sejak Fase 7 ada **tiga** peran (`users.role`), dan sejak Fase 10 menjadi **empat**: `operator` (Pengelola/Pemilik), `investor` (Mitra Pemodal), `cashier` (Kasir Meja Bakar — staf lapangan), dan `officer` (Mitra Lapangan / Aparat). Setiap peran punya pintu masuk kredensialnya sendiri (`/login`, `/investor/login`, `/cashier/login`, `/officer/login`) dan **tidak** dapat memakai pintu peran lain.
 
-| Fitur / Modul Operasional | Pengelola / Admin (Operator) | Kasir Meja Bakar (Cashier) | Mitra Pemodal (Investor) |
-| :--- | :---: | :---: | :---: |
+| Fitur / Modul Operasional | Pengelola / Admin (Operator) | Kasir Meja Bakar (Cashier) | Mitra Pemodal (Investor) | Mitra Lapangan (Officer) |
+| :--- | :---: | :---: | :---: | :---: |
 | Input Transaksi Beli Petani (Timbang Kering) | Penuh (CRUD) | Ya (hanya input & baca kas meja) | Terblokir Total |
 | Terima Dana Talangan (*Bridge Liquidity*) | Ya | Ya (kebutuhan likuiditas malam) | Terblokir Total |
 | Monitor Saldo Kas Meja Bakar & Emas *Holding* | Ya | Ya | Terblokir Total |
@@ -71,6 +71,24 @@ Sejak Fase 7 ada **tiga** peran (`users.role`): `operator` (Pengelola/Pemilik), 
 * Sistem mengalokasikan anggaran koordinasi lingkungan dan aparat (sebagai asumsi dasar: Rp 5.000.000 per bulan atau Rp 200.000 per hari kerja operasional).
 * Beban ini diperlakukan sebagai faktor pengurang laba kotor harian sebelum dividen dihitung, sehingga secara otomatis ditanggung bersama secara proporsional oleh seluruh modal yang berputar pada hari tersebut.
 
+**Mekanisme pencatatan (Fase 9 — wajib, menggantikan isian manual).**
+
+* **Beban adalah kas keluar, bukan angka yang diketik.** Setiap penyerahan tunai dicatat di meja
+  kasir sebagai **voucher** (`operational_expenses`): kategori (`coordination`/`security`/
+  `consumable`/`other`), nama penerima, nominal, tanggal bisnis, pos kas pembayar, dan pencatat.
+  Satu voucher menghasilkan **satu** `cash_mutations` bertipe `out`, sehingga saldo Kas Meja Bakar
+  berkurang **saat uang diserahkan** — bukan saat tutup buku.
+* **Tanpa isian di layar rekonsiliasi.** Tutup buku menjumlahkan sendiri voucher yang belum
+  terserap (`settlement_id IS NULL`) dan mengisi `daily_settlements.daily_coordination_fee`
+  (non-konsumsi) serta `consumable_opex` (kategori `consumable`). Operator tidak dapat menaikkan
+  beban secara manual; itu menutup celah "biaya fiktif".
+* **Kas yang dialokasikan = pendapatan toko PENUH.** Karena uang beban sudah keluar dari laci
+  lebih dahulu, alokasi `Kas Meja Bakar + Brankas Utama` harus sama dengan pendapatan toko
+  (laci menerima penggantian). Beban tetap mengurangi **laba**, sehingga bagi hasil 80 : 20
+  dihitung dari laba bersih yang sudah dipotong beban (tidak ada yang berubah pada § 3.4).
+* **Beban yang melebihi pendapatan toko ditolak** (`422`, tanpa tulisan) sebagai penjaga salah
+  ketik voucher. Beban pada hari tanpa penjualan tetap tercatat dan diserap sesi berikutnya.
+
 ### 3.4. Skema Dividen Laba Bersih
 * **$80\%$ Laba Bersih:** Hak penuh Pengelola (menanggung beban risiko fisik, kerja malam, fluktuasi kadar toko, dan penyusutan alat). Modal pribadi Pengelola tidak mengambil jatah dari porsi pool $20\%$.
 * **$20\%$ Laba Bersih:** Hak *Pool* Mitra Pemodal, didistribusikan secara pro-rata hanya kepada modal yang terserap pada putaran belanja tersebut.
@@ -101,6 +119,35 @@ talangan** menutup celah itu.
   sebesar hak pengelola hari itu, dan **selisihnya dibayar dari kas kerja pengelola** serta dicatat
   `bridge_loans.fee_uncovered` — **bukan** dari dana mitra. Pool $20\%$ tetap `0,00` pada hari
   minus dan modal pokok mitra tidak pernah dipotong (§ 4.2).
+
+---
+
+### 3.6. Mitra Lapangan & Buku Hak (*Coordination Ledger*)
+
+Aparat/petugas lapangan (keamanan wilayah, koordinasi kampung) dibayar dengan **persentase dari
+laba kotor harian** — bukan nominal tetap, dan bukan beban yang diketik operator.
+
+* **Basis & tarif.** `cut_pct` disimpan **per petugas** (`officers.cut_pct`); potongan dihitung
+  peladen dari **laba kotor** (`pendapatan toko − modal belanja hulu`) pada setiap tutup buku:
+  `floor((basis_sen × pct_perseratus + 5000) / 10000)` (setengah sen ke atas).
+* **Dipotong sebelum bagi hasil.** `net = laba kotor − Σbeban OPEX − Σbonus akrual −
+  Σpotongan petugas − pemulihan defisit`; pool mitra 20 % ikut mengecil secara proporsional.
+* **Hari minus & cap.** Potongan hanya dari laba kotor yang ada: `cap = max(0, laba kotor)`,
+  sehingga pada hari minus potongan `0`. Σ tarif seluruh petugas aktif dibatasi
+  `system_settings.officer_cut_total_cap_pct`.
+* **Uangnya terparkir di laci.** Karena `total_cash = pendapatan toko` (§ 3.3), potongan dan bonus
+  tetap berada di Kas Meja Bakar sebagai **kewajiban** (`officers.balance_payable`) sampai
+  dicairkan. Identitas yang dijaga: `meja = baseline + pemulihan defisit + Σ saldo hak`.
+* **Bonus manual = akrual.** Operator dapat menyuntik bonus; bonus **tidak** membuat voucher
+  `operational_expenses` dan **tidak** mengeluarkan kas. Laba berkurang sekali, yaitu ketika tutup
+  buku berikutnya menyerapnya (`officer_ledger_entries.settlement_id`).
+* **Pencairan.** Operator mencairkan saldo hak kapan saja (parsial/penuh) dari **Kas Meja Bakar
+  atau Brankas Utama**: satu `cash_mutations` `out` + saldo hak turun, dalam satu transaksi.
+  Pencairan **tidak pernah** menjadi beban — kewajibannya sudah dibebankan saat akrual.
+* **Portal blind.** Petugas masuk lewat `/officer/login` (PIN 6 digit) dan hanya melihat
+  **saldo haknya sendiri**, ringkasan bulan berjalan, dan riwayat entri. Tarif (`cut_pct`) dan
+  basis potongan (`base_amount`) **tidak pernah** dirender: keduanya dapat dibalik menjadi laba
+  kotor pemilik sistem.
 
 ---
 
@@ -320,19 +367,25 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
   $$\text{Subtotal Tebus} = W_{\text{kering}} \times \text{Harga Tebus Lapangan}$$
   $$\text{Uang Bersih Keluar (Net Pay)} = \text{Subtotal Tebus} - \text{Biaya Jasa Bakar}$$
 * **Aksi Sistem:** Tombol **"Bayar Tunai & Catat"** langsung memotong kas aktif meja dan menambah stok fisik emas padu dengan status `HOLDING_OVERNIGHT`.
+* **Aksi Cepat Beban (Fase 9):** tombol **`− Catat Beban Kas`** membuka modal (kategori, nama penerima, nominal, catatan) dan langsung mencatat kas keluar non-emas. Tidak ada halaman terpisah: kasir yang sedang memegang uang tunai tidak perlu berpindah layar. Modal ini menerima peran **operator maupun kasir**.
 
 ### Modul 2: Likuidasi Toko & Penutupan Buku (*Settlement Engine*)
-* **Input Transaksi:**
+* **Input Transaksi (manual operator):**
   * Berat Total Penjualan Toko (gram).
   * Kadar Taksiran Timbang Air Toko (%).
   * Harga Jual Riil Toko (Rp/gram).
-  * Beban Koordinasi Lapangan Hari Ini (Rp).
+  * Dua nominal alokasi kas (boleh dikosongkan = pakai saran sistem).
   * Unggah Foto Nota Toko Asli.
+* **Input Otomatis (Fase 9 — bukan isian):**
+  * **Beban koordinasi/lapangan** = jumlah voucher `operational_expenses` yang belum terserap,
+    ditampilkan **read-only** di layar (daftar penerima + total). Rinciannya: kategori
+    `consumable` → `daily_settlements.consumable_opex`, sisanya → `daily_coordination_fee`.
 * **Aksi Sistem:** Tombol **"Eksekusi Settlement Harian"** menjalankan kalkulasi:
-  $$\text{Laba Bersih} = \text{Laba Kotor} - \text{Beban Aparat} - \text{Pemulihan Defisit Sebelumnya}$$
+  $$\text{Laba Bersih} = \text{Laba Kotor} - \text{Beban Operasional} - \text{Pemulihan Defisit Sebelumnya}$$
   * Mengalokasikan $80\%$ ke saldo laba Pengelola.
   * Mengalokasikan $20\%$ ke akun mitra pemodal yang modalnya terserap secara pro-rata.
-  * Mengembalikan modal pokok belanja ke status kas likuid siap putar.
+  * Mengembalikan modal pokok belanja **ditambah beban yang sudah dibayar dari laci** ke kas
+    likuid siap putar: $\text{Kas Meja} + \text{Brankas} = \text{Pendapatan Toko}$ (penuh).
 
 ### Modul 3: Dasbor Privat Pemodal (*Blind Investor Portal*)
 * **Komponen Antarmuka:**
@@ -513,8 +566,13 @@ di kode (`OnboardingService::WAIVER_VERSION` + `waiverClause()`), bukan disalin 
 > **Tambahan Fase 8 (buku kasbon).** Tiga tabel baru melengkapi sketsa di atas: `miners`
 > (profil petani), `miner_loans` (satu baris per pencairan + `balance_remaining`), dan
 > `miner_loan_ledger` (riwayat kas kasbon, satu baris kas = satu baris ledger). Ketiganya
-> **tabel baru** — nol `ALTER` pada sepuluh tabel lama — dengan uang `DECIMAL(14,2)` dan
+> **tabel baru** — nol `ALTER` pada tabel lama — dengan uang `DECIMAL(14,2)` dan
 > PK `CHAR(36)`. Detail DDL ada di dokumen ERD § 4 tabel 11–13.
+>
+> **Tambahan Fase 9 (beban operasional).** Tabel **ke-14**, `operational_expenses`, melengkapi
+> sketsa: satu baris = satu penyerahan tunai (`expense_date`, `category`, `payee_name`, `amount`,
+> `register_id`, `mutation_id`, `settlement_id`, `recorded_by`, `notes`). Juga **tabel baru, nol
+> `ALTER`**, sehingga total skema menjadi **14 tabel**. Detail DDL ada di dokumen ERD § 4 tabel 14.
 
 ---
 

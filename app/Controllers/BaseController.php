@@ -123,6 +123,7 @@ abstract class BaseController
         return match ($role) {
             Constants::ROLE_INVESTOR => '/investor/dashboard',
             Constants::ROLE_CASHIER  => '/operator/teller',
+            Constants::ROLE_OFFICER  => '/officer/dashboard',
             default                  => '/dashboard',
         };
     }
@@ -138,6 +139,7 @@ abstract class BaseController
         return match ($role) {
             Constants::ROLE_INVESTOR => '/investor/login',
             Constants::ROLE_CASHIER  => '/cashier/login',
+            Constants::ROLE_OFFICER  => '/officer/login',
             default                  => '/login',
         };
     }

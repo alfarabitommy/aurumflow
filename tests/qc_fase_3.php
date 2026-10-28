@@ -43,6 +43,7 @@ use AurumFlow\Helpers\Security;
 use AurumFlow\Models\CashMutation;
 use AurumFlow\Models\DailySettlement;
 use AurumFlow\Models\HuluTransaction;
+use AurumFlow\Models\OperationalExpense;
 use AurumFlow\Models\SystemSetting;
 use AurumFlow\Models\User;
 use AurumFlow\Services\SettlementService;
@@ -498,18 +499,20 @@ foreach ([1, 7, 99, 12345, 100000, 2186500, 999999999] as $netCents) {
 
 Qc::ok('A.4', 'Pembulatan 80 : 20 tidak pernah kehilangan sen (7 nilai uji)', $sharesOk, $sharesDetail);
 
+// Sejak Fase 9 kas yang dialokasikan = PENDAPATAN PENUH (Rp 37.544.000),
+// karena beban operasional sudah keluar tunai dari laci lebih dahulu.
 $quoteManual = SettlementService::quote(
-    $input31 + ['kas_split' => '30.000.000', 'brankas_split' => '7.344.000'],
+    $input31 + ['kas_split' => '30.000.000', 'brankas_split' => '7.544.000'],
     $ctx31
 );
 
 Qc::ok(
     'A.5',
-    'Manual override diterima selama jumlahnya sama dengan kas diterima (Rp 37.344.000)',
+    'Manual override diterima selama jumlahnya sama dengan kas diterima (Rp 37.544.000)',
     $quoteManual['kas'] === '30000000.00'
-        && $quoteManual['brankas'] === '7344000.00'
+        && $quoteManual['brankas'] === '7544000.00'
         && $quoteManual['split_source'] === 'manual'
-        && $quoteManual['suggested_kas'] === '35157500.00'
+        && $quoteManual['suggested_kas'] === '35357500.00'
         && $quoteManual['suggested_brankas'] === '2186500.00',
     'kas=' . $quoteManual['kas'] . ' brankas=' . $quoteManual['brankas'] . ' sumber=' . $quoteManual['split_source']
 );
@@ -517,7 +520,7 @@ Qc::ok(
 Qc::equals(
     'A.5b',
     'Dua isian kosong berarti memakai saran sistem (jalur tanpa JavaScript)',
-    ['suggestion', '35157500.00', '2186500.00'],
+    ['suggestion', '35357500.00', '2186500.00'],
     [$quoteAuto['split_source'], $quoteAuto['kas'], $quoteAuto['brankas']]
 );
 
@@ -590,8 +593,8 @@ Qc::equals(
 
 Qc::equals(
     'A.11',
-    'Hari minus: meja menerima seluruh kas yang ada, brankas Rp 0',
-    ['1850000.00', '0.00', '1850000.00', '0.00'],
+    'Hari minus: meja menerima pendapatan penuh, brankas Rp 0',
+    ['2050000.00', '0.00', '2050000.00', '0.00'],
     [
         $quoteDeficit['suggested_kas'],
         $quoteDeficit['suggested_brankas'],
@@ -661,15 +664,20 @@ Qc::equals(
 
 Qc::ok(
     'A.15',
-    'Invariant alokasi: kas diterima = modal belanja hulu + laba bersih + defisit dipulihkan',
+    'Invariant alokasi (Fase 9): kas diterima = modal + beban + laba + defisit dipulihkan',
     $quoteAuto['total_cash_cents']
-        === $quoteAuto['holding_cost_cents'] + $quoteAuto['net_cents'] + $quoteAuto['deficit_recovery_cents']
+        === $quoteAuto['holding_cost_cents'] + $quoteAuto['coord_fee_cents']
+            + $quoteAuto['net_cents'] + $quoteAuto['deficit_recovery_cents']
     && $quoteDeficit['total_cash_cents']
-        === $quoteDeficit['holding_cost_cents'] + $quoteDeficit['net_cents'] + $quoteDeficit['deficit_recovery_cents']
+        === $quoteDeficit['holding_cost_cents'] + $quoteDeficit['coord_fee_cents']
+            + $quoteDeficit['net_cents'] + $quoteDeficit['deficit_recovery_cents']
     && $quoteRecover['total_cash_cents']
-        === $quoteRecover['holding_cost_cents'] + $quoteRecover['net_cents'] + $quoteRecover['deficit_recovery_cents']
-    // Pada hari minus, kekurangan kas persis sebesar defisit yang dicatat.
-    && $quoteDeficit['holding_cost_cents'] - $quoteDeficit['kas_cents'] === $quoteDeficit['carryover_cents'],
+        === $quoteRecover['holding_cost_cents'] + $quoteRecover['coord_fee_cents']
+            + $quoteRecover['net_cents'] + $quoteRecover['deficit_recovery_cents']
+    // Pada hari minus, kekurangan kas = defisit yang dicatat (beban sudah
+    // keluar dari laci, jadi ikut diperhitungkan).
+    && $quoteDeficit['holding_cost_cents'] + $quoteDeficit['coord_fee_cents']
+        - $quoteDeficit['kas_cents'] === $quoteDeficit['carryover_cents'],
     '3.1=' . $quoteAuto['total_cash'] . ' 3.2=' . $quoteDeficit['total_cash'] . ' 3.3=' . $quoteRecover['total_cash']
 );
 
@@ -882,12 +890,12 @@ Qc::ok(
 
 // Nilai awal yang dirender peladen. Inilah yang harus dibaca peramban; bila
 // `value`-nya kosong, peladen menolak form dengan "wajib diisi"
-// (Plan_Fix_Settlement_UI § 2.2). `coord_fee` memakai asumsi PRD sebagai saran
-// awal, sedangkan kadar & harga jual memang milik operator.
+// (Plan_Fix_Settlement_UI § 2.2). Sejak Fase 9 `coord_fee` TIDAK ada lagi:
+// beban diturunkan peladen dari voucher, jadi yang diuji adalah ringkasan
+// read-only + berat dari peladen + kadar/harga yang memang milik operator.
 $prefillProblems = [];
 $prefillExpected = [
     'sold_grams'       => 'value="18,050"',
-    'coord_fee'        => 'value="200.000"',
     'density_pct'      => 'value=""',
     'shop_price_per_g' => 'value=""',
 ];
@@ -908,8 +916,10 @@ foreach ($prefillExpected as $fieldName => $needle) {
 
 Qc::ok(
     'G.1a',
-    'Layar rekonsiliasi merender pre-fill: berat = gram holding, beban aparat = asumsi PRD, kadar & harga kosong',
-    $prefillProblems === [],
+    'Layar rekonsiliasi merender pre-fill (berat = gram holding, kadar & harga kosong) dan ringkasan beban read-only',
+    $prefillProblems === []
+        && str_contains($page['body'], 'Beban Operasional Terserap')
+        && !str_contains($page['body'], 'name="coord_fee"'),
     implode("\n", $prefillProblems)
 );
 
@@ -919,6 +929,15 @@ $distributionsBefore31 = $distributionCount();
 $receiptsBefore31 = count(QcFixture::receiptFiles());
 
 $known31 = qc3_settlement_ids();
+
+// Sejak Fase 9 beban TIDAK lagi diketik di form: ia adalah voucher kas yang
+// sudah keluar dari laci lebih dahulu. Voucher Rp 200.000 ini yang diserap
+// sesi tutup buku (bukan isian `coord_fee`).
+QcFixture::seedOpexVoucher([
+    'category'   => OperationalExpense::CATEGORY_COORDINATION,
+    'payee_name' => 'Aparat QC 3.1',
+    'amount'     => '200.000',
+]);
 
 $post31 = qc3_settle($operatorJar, $input31, [SettlementService::RECEIPT_FIELD => $notaPath]);
 
@@ -1009,15 +1028,17 @@ $tellerMutation31 = $lastInFor($tellerId);
 $brankasMutation31 = $lastInFor($brankasId);
 $kas31Cents = qc3_cents($tellerMutation31['amount'] ?? '');
 $brankas31Cents = qc3_cents($brankasMutation31['amount'] ?? '');
-$totalCash31Cents = qc3_cents($row31['total_shop_revenue'] ?? '') - qc3_cents($row31['daily_coordination_fee'] ?? '');
+// Sejak Fase 9 kas yang dialokasikan = PENDAPATAN PENUH (beban sudah keluar
+// dari laci sebelum tutup buku, lihat audit § 5.5).
+$totalCash31Cents = qc3_cents($row31['total_shop_revenue'] ?? '');
 
 Qc::ok(
     'P3.8',
-    'Smart Auto-Split: Rp 35.157.500 kembali ke Kas Meja, Rp 2.186.500 ke Brankas (jumlah = kas diterima)',
-    $kas31Cents === 3515750000
+    'Smart Auto-Split (Fase 9): Rp 35.357.500 kembali ke Kas Meja (modal + beban), Rp 2.186.500 ke Brankas',
+    $kas31Cents === 3535750000
         && $brankas31Cents === 218650000
         && $kas31Cents + $brankas31Cents === $totalCash31Cents
-        && $totalCash31Cents === 3734400000,
+        && $totalCash31Cents === 3754400000,
     'meja=' . ($tellerMutation31['amount'] ?? '-')
         . ' brankas=' . ($brankasMutation31['amount'] ?? '-')
         . ' total=' . qc3_money($totalCash31Cents)
@@ -1122,6 +1143,12 @@ $receiptsBefore32 = count(QcFixture::receiptFiles());
 
 $known32 = qc3_settlement_ids();
 
+QcFixture::seedOpexVoucher([
+    'category'   => OperationalExpense::CATEGORY_COORDINATION,
+    'payee_name' => 'Aparat QC 3.2',
+    'amount'     => '200.000',
+]);
+
 $post32 = qc3_settle($operatorJar, [
     'sold_grams'       => '1,000',
     'density_pct'      => '93,50',
@@ -1177,11 +1204,11 @@ $tellerMutation32 = $lastInFor($tellerId32);
 
 Qc::ok(
     'P3.15',
-    'Alokasi kas hari minus: meja menerima seluruh kas Rp 1.850.000, brankas Rp 0',
+    'Alokasi kas hari minus: meja menerima pendapatan penuh Rp 2.050.000, brankas Rp 0',
     $brankasBalance() === '0.00'
         && $inCountFor($brankasId32) === 0
         && $inCountFor($tellerId32) === 1
-        && qc3_cents($tellerMutation32['amount'] ?? '') === 185000000
+        && qc3_cents($tellerMutation32['amount'] ?? '') === 205000000
         && $balance() === '49920000.00',
     'kas=' . $balance() . ' brankas=' . $brankasBalance()
         . ' mutasi_meja=' . $inCountFor($tellerId32) . ' mutasi_brankas=' . $inCountFor($brankasId32)
@@ -1210,6 +1237,12 @@ Qc::equals(
 );
 
 $known33 = qc3_settlement_ids();
+
+QcFixture::seedOpexVoucher([
+    'category'   => OperationalExpense::CATEGORY_COORDINATION,
+    'payee_name' => 'Aparat QC 3.3',
+    'amount'     => '200.000',
+]);
 
 $post33 = qc3_settle($operatorJar, [
     'sold_grams'       => '1,000',
@@ -1418,6 +1451,12 @@ Qc::section('E. Nominal dari klien diabaikan (peladen menghitung ulang)');
 QcFixture::resetSettlementState();
 
 $knownE = qc3_settlement_ids();
+
+QcFixture::seedOpexVoucher([
+    'category'   => OperationalExpense::CATEGORY_COORDINATION,
+    'payee_name' => 'Aparat QC E',
+    'amount'     => '200.000',
+]);
 
 $forgedResponse = qc3_settle($operatorJar, $input31 + [
     'total_shop_revenue'       => '1',
@@ -1902,7 +1941,6 @@ $settlementFieldModes = [
     'sold_grams'       => 'decimal',
     'density_pct'      => 'decimal',
     'shop_price_per_g' => 'numeric',
-    'coord_fee'        => 'numeric',
     'kas_split'        => 'numeric',
     'brankas_split'    => 'numeric',
 ];
@@ -1944,7 +1982,7 @@ foreach ($settlementFieldModes as $fieldName => $inputmode) {
 
 Qc::ok(
     'H.14',
-    'Keenam isian rekonsiliasi: type="text" + inputmode + autocomplete="off" + x-model.fill (form novalidate)',
+    'Kelima isian rekonsiliasi: type="text" + inputmode + autocomplete="off" + x-model.fill (form novalidate)',
     $fieldAttributeProblems === [] && str_contains($settlementView, 'novalidate'),
     implode("\n", $fieldAttributeProblems)
 );
@@ -1982,7 +2020,7 @@ Qc::ok(
 
 $settlementController = (string) file_get_contents(APP_PATH . '/Controllers/SettlementController.php');
 
-$expectedFields = ['brankas_split', 'coord_fee', 'density_pct', 'kas_split', 'shop_price_per_g', 'sold_grams'];
+$expectedFields = ['brankas_split', 'density_pct', 'kas_split', 'shop_price_per_g', 'sold_grams'];
 
 // View memuat satu field bernama tambahan: berkas nota dibaca dari `$_FILES`
 // (`SettlementService::RECEIPT_FIELD`), bukan `$_POST`, sehingga memang tidak
@@ -2085,7 +2123,6 @@ $settlementControls = [
     'sold_grams',
     'density_pct',
     'shop_price_per_g',
-    'coord_fee',
     'receipt_photo',
     'kas_split',
     'brankas_split',
@@ -2245,9 +2282,9 @@ $protocol = [
     ],
     [
         'Alokasi Kas Fisik (3.1)',
-        'meja + brankas = pendapatan - aparat',
-        'Rp 35.157.500 + Rp 2.186.500',
-        $kas31Cents === 3515750000 && $brankas31Cents === 218650000 && $kas31Cents + $brankas31Cents === $totalCash31Cents
+        'meja + brankas = pendapatan (Fase 9: beban sudah keluar dari laci)',
+        'Rp 35.357.500 + Rp 2.186.500',
+        $kas31Cents === 3535750000 && $brankas31Cents === 218650000 && $kas31Cents + $brankas31Cents === $totalCash31Cents
             ? 'LULUS' : 'GAGAL',
         'kas meja ' . qc3_cents_money($kas31Cents) . ' | brankas ' . qc3_cents_money($brankas31Cents),
     ],

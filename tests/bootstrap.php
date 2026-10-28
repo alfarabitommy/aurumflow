@@ -33,10 +33,15 @@ use AurumFlow\Models\HuluTransaction;
 use AurumFlow\Models\Miner;
 use AurumFlow\Models\MinerLoan;
 use AurumFlow\Models\MinerLoanLedger;
+use AurumFlow\Models\Officer;
+use AurumFlow\Models\OfficerLedgerEntry;
+use AurumFlow\Models\OperationalExpense;
 use AurumFlow\Models\SystemSetting;
 use AurumFlow\Models\User;
 use AurumFlow\Services\BridgeLoanService;
+use AurumFlow\Services\ExpenseService;
 use AurumFlow\Services\KasbonService;
+use AurumFlow\Services\OfficerService;
 use AurumFlow\Services\OnboardingService;
 use AurumFlow\Services\SettlementService;
 use AurumFlow\Services\TellerService;
@@ -462,6 +467,20 @@ final class QcFixture
             'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)'
         );
 
+        // Fase 9: tabel beban operasional non-emas. Jalur yang sama dengan
+        // `database/migrate.php` M3 — satu pemilik: `OperationalExpense::ensureSchema()`.
+        OperationalExpense::ensureSchema();
+
+        // Fase 10: buku hak mitra lapangan (dua tabel) + batas Σ tarif. Jalur
+        // yang sama dengan `database/migrate.php` M4 — satu pemilik:
+        // `Officer::ensureSchema()` + `SystemSetting::ensure()`.
+        Officer::ensureSchema();
+        SystemSetting::ensure(
+            OfficerService::SETTING_CUT_TOTAL_CAP_PCT,
+            '100.00',
+            'Batas atas jumlah persentase potongan seluruh mitra lapangan aktif (%)'
+        );
+
         Database::executeSqlFile(DATABASE_PATH . '/schema.sql');
         Database::executeSqlFile(DATABASE_PATH . '/seed.sql');
 
@@ -609,6 +628,18 @@ final class QcFixture
         // mutasi pos kas meja — tanpa urutan ini penghapusan mutasi gagal.
         self::resetKasbonState();
 
+        // Buku hak mitra lapangan (Fase 10): `settlement_id` memakai FK RESTRICT
+        // ke `daily_settlements` dan `mutation_id` RESTRICT ke `cash_mutations`.
+        // Entri dibuang paling awal (pola `resetKasbonState()`), sehingga suite
+        // Fase 2–9 tidak mewarisi saldo hak yang menggeser angka protokol.
+        self::resetOfficerState();
+
+        // Beban operasional (Fase 9) juga memakai FK `ON DELETE RESTRICT` ke
+        // `cash_mutations` (`operational_expenses.mutation_id`), sehingga
+        // voucher dibuang SEBELUM mutasi pos kas meja. Pola yang sama dengan
+        // `resetKasbonState()`.
+        self::resetExpenseState();
+
         // Talangan berikutnya (Fase 6): baris `bridge_loans` menunjuk pos kas &
         // sesi tutup buku, dan suite ini mengosongkan mutasi pos kas meja —
         // membiarkannya hidup berarti talangan tanpa kas masuk yang tercatat.
@@ -734,6 +765,17 @@ final class QcFixture
         // `resetKasbonState()`), yang dihapus beberapa langkah di bawah.
         self::resetKasbonState();
 
+        // Buku hak mitra lapangan (Fase 10): `officer_ledger_entries` memakai FK
+        // `ON DELETE RESTRICT` ke `daily_settlements` (sengaja, lihat A-10 pada
+        // rencana Fase 10) — entri WAJIB dibuang sebelum sesi tutup buku.
+        self::resetOfficerState();
+
+        // Beban operasional (Fase 9): `operational_expenses.mutation_id` memakai
+        // FK RESTRICT dan `settlement_id` memakai SET NULL. Voucher dibuang di
+        // sini supaya `cash_mutations` (pos meja maupun brankas) dapat dihapus;
+        // fakta kas yang berdiri sendiri tidak boleh menghalangi pembersihan.
+        self::resetExpenseState();
+
         // Talangan berikutnya (Fase 6): `bridge_loans.settlement_id` memakai FK
         // `ON DELETE RESTRICT`, jadi baris anak harus dibuang sebelum sesi.
         self::resetBridgeState();
@@ -773,6 +815,81 @@ final class QcFixture
     public static function resetBridgeState(): void
     {
         Database::query('DELETE FROM `bridge_loans`');
+    }
+
+    /**
+     * Bersihkan seluruh jejak beban operasional (Fase 9). Idempotent.
+     *
+     * Wajib berjalan SEBELUM `cash_mutations` dihapus: `operational_expenses.mutation_id`
+     * memakai FK `ON DELETE RESTRICT`. Mutasi milik voucher ikut dibuang di sini
+     * (pola `resetKasbonState()`), sehingga tidak ada baris kas yatim yang
+     * menjelaskan beban yang sudah tidak ada. Saldo pos kas TIDAK disentuh —
+     * itu urusan `resetTellerState()`.
+     */
+    public static function resetExpenseState(): void
+    {
+        $mutationIds = Database::fetchAll('SELECT `mutation_id` FROM `operational_expenses`');
+
+        Database::query('DELETE FROM `operational_expenses`');
+
+        foreach ($mutationIds as $row) {
+            $mutationId = (string) ($row['mutation_id'] ?? '');
+
+            if ($mutationId !== '') {
+                Database::query('DELETE FROM `cash_mutations` WHERE `id` = :id', ['id' => $mutationId]);
+            }
+        }
+    }
+
+    /**
+     * Catat satu beban operasional lewat jalur kode nyata
+     * (`ExpenseService::pay()`) — bukan INSERT langsung, supaya fixture menguji
+     * jalur yang sama dengan lapangan.
+     *
+     * @param array<string, mixed> $override nilai form yang ditimpa
+     */
+    public static function seedOpexVoucher(array $override = []): void
+    {
+        ExpenseService::pay($override + [
+            'category'   => OperationalExpense::CATEGORY_COORDINATION,
+            'payee_name' => 'Aparat QC',
+            'amount'     => '200.000',
+            'notes'      => 'voucher QC',
+            'recorded_by' => null,
+        ]);
+    }
+
+    /**
+     * Ringkasan keadaan beban operasional saat ini (potret untuk assertion
+     * "nol tulisan" dan idempotensi fixture).
+     *
+     * @return array{count: int, count_open: int, total: string, mutations: int}
+     */
+    public static function opexSnapshot(): array
+    {
+        $row = Database::fetchOne(
+            'SELECT COUNT(*) AS `total`,'
+            . ' COALESCE(SUM(CASE WHEN `settlement_id` IS NULL THEN 1 ELSE 0 END), 0) AS `open_rows`,'
+            . ' COALESCE(SUM(`amount`), 0) AS `amount`'
+            . ' FROM `operational_expenses`'
+        ) ?? [];
+
+        return [
+            'count'      => (int) ($row['total'] ?? 0),
+            'count_open' => (int) ($row['open_rows'] ?? 0),
+            'total'      => TellerService::centsToDecimal(TellerService::moneyToCents((string) ($row['amount'] ?? '0.00'))),
+            'mutations'  => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `cash_mutations` WHERE `register_id` = :id',
+                ['id' => self::tellerId()]
+            )['total'] ?? 0),
+        ];
+    }
+
+    private static function tellerId(): string
+    {
+        $register = CashRegister::activeTeller();
+
+        return (string) ($register['id'] ?? '');
     }
 
     /**
@@ -1818,6 +1935,203 @@ final class QcFixture
         }
 
         return $deleted;
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase 10 — buku hak mitra lapangan
+    // -----------------------------------------------------------------------
+
+    /**
+     * Petugas QC Fase 10 — nomor berawalan `0896` (0897 kasir, 0898 mitra
+     * pemodal, 0895 petani; `0896` sengaja dipilih agar tidak bertabrakan
+     * dengan prefiks fixture lain).
+     */
+    public const QC_OFFICER = [
+        'phone'   => '089600000101',
+        'name'    => 'QC Mitra Lapangan',
+        'pin'     => '246810',
+        'cut_pct' => '2,50',
+    ];
+
+    /** Petugas kedua: pembanding uji cap Σ tarif & isolasi daftar. */
+    public const QC_OFFICER_SECOND = [
+        'phone'   => '089600000102',
+        'name'    => 'QC Mitra Lapangan Cadangan',
+        'pin'     => '975310',
+        'cut_pct' => '1,00',
+    ];
+
+    /** Prefiks nomor akun petugas uji (dibersihkan setiap kali fixture jalan). */
+    public const QC_OFFICER_PREFIX = '0896%';
+
+    /**
+     * Hapus seluruh jejak buku hak mitra lapangan (Fase 10). Idempoten.
+     *
+     * Urutan WAJIB: `officer_ledger_entries` → `officers` → akun `0896%`,
+     * karena `officer_ledger_entries.settlement_id` memakai FK
+     * `ON DELETE RESTRICT` ke `daily_settlements` (sengaja — lihat A-10 pada
+     * rencana Fase 10) dan `mutation_id` RESTRICT ke `cash_mutations`.
+     *
+     * Seluruh ENTRI dihapus (bukan hanya milik QC) karena FK RESTRICT itu akan
+     * menghalangi pembersihan sesi tutup buku QC; petugas yang dibuat manual
+     * saat uji lapangan **dinetralkan** (`neutraliseOfficers()`), bukan
+     * dihapus — pola `neutraliseWallets()`. Saldo pos kas TIDAK disentuh
+     * (urusan `resetTellerState()`).
+     */
+    public static function resetOfficerState(): void
+    {
+        Database::query('DELETE FROM `officer_ledger_entries`');
+
+        Database::query(
+            'DELETE FROM `officers` WHERE `user_id` IN '
+            . '(SELECT `id` FROM `users` WHERE `phone_number` LIKE :prefix)',
+            ['prefix' => self::QC_OFFICER_PREFIX]
+        );
+
+        Database::query(
+            'DELETE FROM `users` WHERE `phone_number` LIKE :prefix',
+            ['prefix' => self::QC_OFFICER_PREFIX]
+        );
+
+        self::neutraliseOfficers();
+    }
+
+    /**
+     * Netralkan seluruh petugas yang tersisa (tarif & saldo hak dinolkan).
+     *
+     * `SettlementService` membaca SEMUA petugas aktif ber-`cut_pct > 0`,
+     * sehingga petugas buatan manual saat pengujian lapangan akan menggeser
+     * angka protokol Fase 3–9. Menolkan nilai — bukan menghapus baris — menjaga
+     * data pengujian pemilik aplikasi.
+     */
+    public static function neutraliseOfficers(): void
+    {
+        Database::query(
+            'UPDATE `officers` SET `cut_pct` = 0.00, `balance_payable` = 0.00'
+        );
+    }
+
+    /**
+     * Siapkan satu petugas QC lewat jalur kode nyata (`OfficerService::create()`).
+     *
+     * @param array<string, string> $override nilai form yang ditimpa
+     * @return array{officer_id: string, user_id: string, full_name: string,
+     *               phone_number: string, cut_pct: string}
+     */
+    public static function seedQcOfficer(array $override = []): array
+    {
+        self::ensureInstalled();
+
+        $input = array_merge(self::QC_OFFICER, $override);
+
+        self::purgeOfficerByPhone((string) $input['phone']);
+
+        return OfficerService::create([
+            'full_name'    => (string) $input['name'],
+            'phone_number' => (string) $input['phone'],
+            'pin'          => (string) $input['pin'],
+            'pin_confirm'  => (string) $input['pin'],
+            'cut_pct'      => (string) $input['cut_pct'],
+        ]);
+    }
+
+    /**
+     * Catat satu bonus akrual lewat jalur nyata (`OfficerService::injectBonus()`).
+     *
+     * @return array<string, mixed>
+     */
+    public static function seedQcBonus(string $officerId, string $amount = '150.000', array $override = []): array
+    {
+        return OfficerService::injectBonus($override + [
+            'officer_id'  => $officerId,
+            'amount'      => $amount,
+            'notes'       => 'bonus QC',
+            'recorded_by' => null,
+        ]);
+    }
+
+    /**
+     * Potret keadaan buku hak + kas — dipakai assertion "nol tulisan".
+     *
+     * @return array<string, mixed>
+     */
+    public static function officerSnapshot(): array
+    {
+        $officers = Database::fetchOne(
+            'SELECT COUNT(*) AS `total`, COALESCE(SUM(`balance_payable`), 0) AS `payable`,'
+            . ' COALESCE(SUM(`cut_pct`), 0) AS `pct` FROM `officers`'
+        );
+
+        $entries = Database::fetchOne(
+            'SELECT COUNT(*) AS `total`, COALESCE(SUM(`amount`), 0) AS `amount`'
+            . ' FROM `officer_ledger_entries`'
+        );
+
+        $teller = CashRegister::activeTeller();
+        $brankas = CashRegister::findBrankas();
+
+        return [
+            'officers'        => (int) ($officers['total'] ?? 0),
+            'payable'         => self::canonicalMoney((string) ($officers['payable'] ?? '0')),
+            'pct'             => self::canonicalMoney((string) ($officers['pct'] ?? '0')),
+            'entries'         => (int) ($entries['total'] ?? 0),
+            'entries_amount'  => self::canonicalMoney((string) ($entries['amount'] ?? '0')),
+            'teller_balance'  => $teller === null ? '0.00' : (string) $teller['current_balance'],
+            'brankas_balance' => $brankas === null ? '0.00' : (string) $brankas['current_balance'],
+            'teller_mutations' => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `cash_mutations` WHERE `register_id` = :id',
+                ['id' => (string) ($teller['id'] ?? '')]
+            )['total'] ?? 0),
+            'brankas_mutations' => (int) (Database::fetchOne(
+                'SELECT COUNT(*) AS `total` FROM `cash_mutations` WHERE `register_id` = :id',
+                ['id' => (string) ($brankas['id'] ?? '')]
+            )['total'] ?? 0),
+        ];
+    }
+
+    /**
+     * Hapus satu akun petugas beserta baris bukunya (urutan FK), idempoten.
+     */
+    private static function purgeOfficerByPhone(string $phone): void
+    {
+        if ($phone === '') {
+            return;
+        }
+
+        $user = User::findByPhoneNumber($phone, false);
+
+        if ($user === null) {
+            return;
+        }
+
+        $userId = (string) $user['id'];
+        $officer = Officer::findByUserId($userId);
+
+        if ($officer !== null) {
+            $officerId = (string) $officer['id'];
+
+            $mutations = Database::fetchAll(
+                'SELECT `mutation_id` FROM `officer_ledger_entries` WHERE `officer_id` = :officer_id',
+                ['officer_id' => $officerId]
+            );
+
+            Database::query(
+                'DELETE FROM `officer_ledger_entries` WHERE `officer_id` = :officer_id',
+                ['officer_id' => $officerId]
+            );
+
+            foreach ($mutations as $row) {
+                $mutationId = (string) ($row['mutation_id'] ?? '');
+
+                if ($mutationId !== '') {
+                    Database::query('DELETE FROM `cash_mutations` WHERE `id` = :id', ['id' => $mutationId]);
+                }
+            }
+
+            Database::query('DELETE FROM `officers` WHERE `id` = :id', ['id' => $officerId]);
+        }
+
+        Database::query('DELETE FROM `users` WHERE `id` = :id', ['id' => $userId]);
     }
 
     /**

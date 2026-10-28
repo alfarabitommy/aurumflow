@@ -6,7 +6,7 @@ declare(strict_types=1);
 |--------------------------------------------------------------------------
 | QC-4 — Seed Reading & Integritas Skema ERD
 |--------------------------------------------------------------------------
-| Membuktikan bahwa DDL ERD diterapkan apa adanya: 13 tabel, konvensi tipe
+| Membuktikan bahwa DDL ERD diterapkan apa adanya: 14 tabel, konvensi tipe
 | data (DECIMAL(14,2) / DECIMAL(8,3) / DECIMAL(5,2)), primary key UUID
 | CHAR(36), seed system_settings lengkap, dan guard database/install.php.
 */
@@ -45,6 +45,8 @@ $erdTables = [
     'miners',
     'miner_loans',
     'miner_loan_ledger',
+    // Fase 9 — beban operasional non-emas (tabel baru, nol ALTER).
+    'operational_expenses',
 ];
 
 // ---------------------------------------------------------------------------
@@ -285,7 +287,9 @@ Qc::ok(
         'fk_loan_miner'      => 'RESTRICT',
     ]
         && (int) ($kasbonPhoneIndex['total'] ?? 0) === 1
-        && substr_count($kasbonSchemaSource, 'CREATE TABLE IF NOT EXISTS') === 13
+        // 13 tabel sampai Fase 8; Fase 9 menambah `operational_expenses`
+        // sebagai tabel baru (nol ALTER pada tabel lama).
+        && substr_count($kasbonSchemaSource, 'CREATE TABLE IF NOT EXISTS') === 16
         && !preg_match('/ALTER\s+TABLE/i', $kasbonSchemaSource),
     json_encode($kasbonFkRules)
 );
@@ -390,6 +394,7 @@ $expectedSettings = [
     'notice_period_days'            => '7',
     'active_carryover_deficit'      => '0.00',
     'daily_loan_limit'              => '500000.00',
+    'officer_cut_total_cap_pct'     => '100.00',
 ];
 
 $settingProblems = [];
@@ -404,7 +409,7 @@ foreach ($expectedSettings as $key => $expected) {
 
 Qc::ok(
     '4.10c',
-    'Seluruh 7 nilai seed system_settings sesuai ERD',
+    'Seluruh 8 nilai seed system_settings sesuai ERD',
     $settingProblems === [] && count($settings) === count($expectedSettings),
     'jumlah=' . count($settings) . ' diharapkan=' . count($expectedSettings) . "\n" . implode("\n", $settingProblems)
 );
@@ -503,12 +508,13 @@ Qc::throws(
 // lama (`qc_fase_7` membuktikan urutan ENUM & migrasi idempotennya).
 Qc::ok(
     '4.12c.2',
-    'Peran kasir (Fase 7) diterima ENUM dan ditolak bila peran lama tergeser',
+    'Peran kasir (Fase 7) & mitra lapangan (Fase 10) diterima ENUM tanpa menggeser peran lama',
     (static function (): bool {
         $values = User::roleEnumValues();
 
-        return $values === ['operator', 'investor', 'cashier']
-            && in_array(Constants::ROLE_CASHIER, $values, true);
+        return $values === ['operator', 'investor', 'cashier', 'officer']
+            && in_array(Constants::ROLE_CASHIER, $values, true)
+            && in_array(Constants::ROLE_OFFICER, $values, true);
     })(),
     'ENUM users.role = ' . implode(', ', User::roleEnumValues())
 );

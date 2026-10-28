@@ -238,6 +238,22 @@ function qc6_tokens(string $jar, string $path): array
 }
 
 /**
+ * Catat voucher beban Rp 200.000 lewat jalur kode nyata.
+ *
+ * Sejak Fase 9 beban operasional TIDAK lagi dikirim lewat form: tutup buku
+ * menyerap voucher `operational_expenses` yang belum terserap. Basis angka
+ * suite ini (beban Rp 200.000) dipertahankan lewat voucher ini.
+ */
+function qc6_seedExpense(): void
+{
+    QcFixture::seedOpexVoucher([
+        'category'   => \AurumFlow\Models\OperationalExpense::CATEGORY_COORDINATION,
+        'payee_name' => 'Aparat QC 6',
+        'amount'     => '200.000',
+    ]);
+}
+
+/**
  * Kirim form tutup buku dengan token segar (nota wajib).
  *
  * `$tokenPath` menentukan halaman asal token: token form (`_once`) milik SESI,
@@ -1168,6 +1184,8 @@ QcFixture::seedBridgeLoan([
 $loanId = (string) (qc6_last_loan()['id'] ?? '');
 $knownSettlements = qc6_settlement_ids();
 
+qc6_seedExpense();
+
 $settle = qc6_settle($operatorJar, [
     'sold_grams'       => '18,050',
     'density_pct'      => '93,50',
@@ -1283,6 +1301,8 @@ Qc::equals(
 $secondBatch = QcFixture::seedHoldingBatch('1,000', '1.950.000', 'QC Talangan Lanjutan');
 $knownSettlements = qc6_settlement_ids();
 
+qc6_seedExpense();
+
 $secondSettle = qc6_settle($operatorJar, [
     'sold_grams'       => '1,000',
     'density_pct'      => '93,50',
@@ -1335,6 +1355,8 @@ QcFixture::resetSettlementState();
 $wallets = QcFixture::seedQcWallets();
 $knownSettlements = qc6_settlement_ids();
 
+qc6_seedExpense();
+
 $plainSettle = qc6_settle($operatorJar, $settleFields, $receiptPath);
 $plainRow = qc6_new_settlement($knownSettlements);
 $plainId = (string) ($plainRow['id'] ?? '');
@@ -1360,6 +1382,8 @@ QcFixture::seedBridgeLoan([
 ]);
 
 $knownSettlements = qc6_settlement_ids();
+
+qc6_seedExpense();
 
 $bridgeSettle = qc6_settle($operatorJar, $settleFields, $receiptPath);
 $bridgeRow = qc6_new_settlement($knownSettlements);
@@ -1451,6 +1475,8 @@ QcFixture::seedBridgeLoan([
 
 $profitsBeforeLoss = qc6_wallet_profits();
 $knownSettlements = qc6_settlement_ids();
+
+qc6_seedExpense();
 
 $lossSettle = qc6_settle($operatorJar, [
     'sold_grams'       => '18,050',
@@ -1561,6 +1587,8 @@ QcFixture::seedHoldingBatch('35,000', '1.950.000', 'QC Belanja Habis');
 
 $tellerId = (string) (CashRegister::activeTeller()['id'] ?? '');
 
+qc6_seedExpense();
+
 $beforeGuard = [
     'meja' => QcFixture::registerBalance($tellerId),
     'active' => QcFixture::bridgeSnapshot()['count_active'],
@@ -1573,7 +1601,7 @@ $guard = qc6_settle($operatorJar, [
     'shop_price_per_g' => '2.000.000',
     'coord_fee'        => '200.000',
     'kas_split'        => '0',
-    'brankas_split'    => '69.800.000',
+    'brankas_split'    => '70.000.000',
 ], $receiptPath);
 
 $afterGuard = [
@@ -1689,6 +1717,8 @@ Qc::ok(
 );
 
 $knownSettlements = qc6_settlement_ids();
+qc6_seedExpense();
+
 $noFeeSettle = qc6_settle($operatorJar, [
     'sold_grams'       => '18,050',
     'density_pct'      => '93,50',
@@ -1942,8 +1972,8 @@ $agentsDocSource = (string) file_get_contents(BASE_PATH . '/AGENTS.md');
 
 Qc::ok(
     'G.17',
-    'Service worker mem-precache `app.js` & `app.min.css` dengan versi shell yang sudah dinaikkan (v3)',
-    str_contains($serviceWorker, "'aurumflow-shell-v3'")
+    'Service worker mem-precache `app.js` & `app.min.css` dengan versi shell yang sudah dinaikkan (v5)',
+    str_contains($serviceWorker, "'aurumflow-shell-v5'")
         && str_contains($serviceWorker, "'./assets/js/app.js'")
         && str_contains($serviceWorker, "'./assets/css/app.min.css'"),
     'CACHE_NAME = ' . (preg_match("/CACHE_NAME = '([^']+)'/", $serviceWorker, $cacheMatch) === 1
@@ -2076,11 +2106,12 @@ sort($allTables);
 
 Qc::equals(
     'H.7',
-    'Skema kini 13 tabel ERD (sembilan lama + bridge_loans + tiga tabel kasbon)',
+    'Skema kini 16 tabel ERD (+ officers & officer_ledger_entries pada Fase 10)',
     [
         'bridge_loans', 'capital_wallets', 'cash_mutations', 'cash_registers', 'daily_settlements',
         'hulu_transactions', 'miner_loan_ledger', 'miner_loans', 'miners',
-        'profit_distributions', 'system_settings', 'users', 'withdrawal_requests',
+        'officer_ledger_entries', 'officers',
+        'operational_expenses', 'profit_distributions', 'system_settings', 'users', 'withdrawal_requests',
     ],
     $allTables
 );

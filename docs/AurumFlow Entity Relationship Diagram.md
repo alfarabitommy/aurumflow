@@ -86,7 +86,15 @@
 | `miner_loans` → `miner_loan_ledger` | 1 : N | Setiap pergerakan kas kasbon (pencairan atau angsuran) menghasilkan **satu** baris ledger dengan `balance_after` pinjaman tersebut. |
 | `cash_mutations` → `miner_loan_ledger` | 1 : 1 | Satu baris kas = satu baris ledger (`mutation_id`), sehingga jejak piutang selalu dapat ditelusuri ke mutasi kas fisiknya. |
 | `cash_registers` → `miner_loan_ledger` | 1 : N | Seluruh kas kasbon mengalir melalui pos `Kas Meja Bakar`: pencairan sebagai mutasi `out`, angsuran (tunai maupun potong nota) sebagai mutasi `in`. |
+| `cash_registers` → `operational_expenses` | 1 : N | Pos kas pembayar beban operasional non-emas. Fase 9 membatasi pembayar ke `Kas Meja Bakar` (laci kasir); kolomnya tetap ada agar beban dari pos lain dapat dicatat tanpa migrasi. |
+| `cash_mutations` → `operational_expenses` | 1 : 1 | Satu voucher beban = satu baris kas `out` (`mutation_id`), sehingga setiap rupiah beban dapat ditelusuri ke mutasi kas fisiknya. |
+| `daily_settlements` → `operational_expenses` | 1 : N | Satu sesi tutup buku menyerap seluruh voucher yang belum terserap (`settlement_id IS NULL`) sebagai pengurang laba kotor. `ON DELETE SET NULL` membuat fakta kas tetap ada bila sesi dihapus. |
 
+| `users` → `officers` | 1 : 1 | Satu akun berperan `officer` memiliki tepat satu akun buku hak (`officers.user_id` UNIQUE). Akun staf lain tidak pernah memiliki baris ini. |
+| `officers` → `officer_ledger_entries` | 1 : N | Satu petugas memiliki banyak entri buku hak: kredit `cut` (akrual potongan tiap tutup buku), kredit `bonus` (suntikan operator), dan debit `disbursement` (pencairan tunai). |
+| `daily_settlements` → `officer_ledger_entries` | 1 : N | Satu sesi tutup buku mengakrualkan potongan tiap petugas aktif (`cut`) dan menyerap akrual bonus yang belum terserap (`bonus`, ditandai `settlement_id`). FK `ON DELETE RESTRICT`: entri yang sudah menunjuk sesi tidak boleh membuat bonus aktif kembali (deduksi ganda). |
+| `cash_registers` → `officer_ledger_entries` | 1 : N | Satu entri `disbursement` menunjuk pos kas pembayar (Kas Meja Bakar atau Brankas Utama). |
+| `cash_mutations` → `officer_ledger_entries` | 1 : 1 | Satu baris kas keluar = satu baris buku hak (`mutation_id` UNIQUE), sehingga setiap pencairan dapat ditelusuri ke mutasi kas fisiknya. |
 ---
 
 ## 3. Kamus Data Entitas (*Data Dictionary*)
@@ -108,6 +116,7 @@
 -- =====================================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS operational_expenses;
 DROP TABLE IF EXISTS profit_distributions;
 DROP TABLE IF EXISTS hulu_transactions;
 DROP TABLE IF EXISTS daily_settlements;
@@ -120,10 +129,11 @@ DROP TABLE IF EXISTS system_settings;
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- =====================================================================
--- SKEMA TOTAL: 13 TABEL
+-- SKEMA TOTAL: 14 TABEL
 --   1-9  fondasi Fase 1 (system_settings … withdrawal_requests)
 --   10   bridge_loans           (dana talangan, Fase 6)
 --   11-13 miners, miner_loans, miner_loan_ledger (buku kasbon petani, Fase 8)
+--   14   operational_expenses   (beban operasional non-emas / OPEX, Fase 9)
 -- Tidak ada tabel lain di luar daftar ini; Fase 7 hanya menambah nilai ENUM.
 -- =====================================================================
 
@@ -150,7 +160,7 @@ CREATE TABLE users (
     -- ATURAN: nilai ENUM hanya boleh DITAMBAHKAN DI UJUNG daftar. MySQL/MariaDB
     -- menyimpan nilai ENUM sebagai indeks ordinal, sehingga menyisipkan atau
     -- mengurutkan ulang nilai akan memetakan ulang arti baris yang sudah ada.
-    role ENUM('operator', 'investor', 'cashier') NOT NULL DEFAULT 'investor',
+    role ENUM('operator', 'investor', 'cashier', 'officer') NOT NULL DEFAULT 'investor',
     invite_token VARCHAR(64) NULL UNIQUE,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     
@@ -213,6 +223,13 @@ CREATE TABLE cash_mutations (
 -- ---------------------------------------------------------------------
 -- 6. TABEL SESI TUTUP BUKU HARIAN (DAILY_SETTLEMENTS)
 -- ---------------------------------------------------------------------
+-- Sejak Fase 9 kedua kolom beban di bawah TIDAK diisi operator: nilainya
+-- dijumlahkan peladen dari voucher `operational_expenses` yang belum terserap
+-- (`settlement_id IS NULL`). `daily_coordination_fee` = subtotal non-konsumsi
+-- (coordination/security/other), `consumable_opex` = subtotal `consumable`,
+-- sehingga jumlah keduanya = total beban yang dipotong dari laba kotor.
+-- Isian manual `coord_fee` dihapus agar beban tidak dapat difiktifkan.
+-- ---------------------------------------------------------------------
 CREATE TABLE daily_settlements (
     id CHAR(36) NOT NULL PRIMARY KEY,
     settlement_date DATE NOT NULL,
@@ -222,8 +239,8 @@ CREATE TABLE daily_settlements (
     total_shop_revenue DECIMAL(14,2) NOT NULL COMMENT 'Total kas masuk dari toko',
     
     -- Komponen Beban Bersama & Mitigasi Defisit
-    daily_coordination_fee DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Biaya aparat/lapangan',
-    consumable_opex DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Pengeluaran jamuan/gas',
+    daily_coordination_fee DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Biaya aparat/lapangan — diisi dari voucher OPEX non-konsumsi (Fase 9)',
+    consumable_opex DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Pengeluaran jamuan/gas — diisi dari voucher kategori consumable (Fase 9)',
     deficit_recovery_used DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Potongan defisit hari sebelumnya',
     
     -- Kalkulasi Bagi Hasil
@@ -406,7 +423,117 @@ CREATE TABLE IF NOT EXISTS miner_loan_ledger (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
--- 14. DATA INISIALISASI DASAR (SEED DATA)
+-- 14. TABEL BEBAN OPERASIONAL NON-EMAS (OPERATIONAL_EXPENSES — Fase 9)
+-- =====================================================================
+-- Beban koordinasi lapangan, pengamanan wilayah, konsumsi, dan biaya
+-- lain-lain yang dibayarkan TUNAI dari laci kasir (PRD § 3.3).
+--
+-- Aturan yang tidak boleh dilanggar:
+--   * Satu voucher = satu baris kas `out` (`mutation_id`, FK RESTRICT) —
+--     pola yang sama dengan `miner_loan_ledger`.
+--   * `amount` selalu positif; arah kas selalu keluar.
+--   * Beban mengurangi laba kotor pada tutup buku, BUKAN mengurangi kas yang
+--     dialokasikan: settlement mengkredit pendapatan toko penuh
+--     (`total_cash = pendapatan`), karena uangnya sudah keluar lebih dahulu
+--     dari laci. Mengurangi dua-duanya menyebabkan selisih buku-vs-fisik
+--     tepat sebesar beban (lihat audit/Audit_Biaya_Koordinasi_AurumFlow.md § 5.5).
+--   * `settlement_id` memakai ON DELETE SET NULL: beban adalah fakta kas yang
+--     berdiri sendiri dan tetap ada bila sesi tutup buku dihapus.
+--   * Nilai ENUM `category` bersifat append-only (tambahkan di ujung daftar).
+CREATE TABLE IF NOT EXISTS operational_expenses (
+    id CHAR(36) NOT NULL,
+    expense_date DATE NOT NULL COMMENT 'Tanggal bisnis pembayaran (bukan created_at)',
+    category ENUM('coordination', 'security', 'consumable', 'other') NOT NULL DEFAULT 'coordination',
+    payee_name VARCHAR(100) NOT NULL COMMENT 'Nama/alias penerima (aparat, petugas, dst.)',
+    amount DECIMAL(14,2) NOT NULL COMMENT 'Selalu positif; arah kas selalu keluar',
+    register_id CHAR(36) NOT NULL COMMENT 'Pos kas pembayar (Fase 9: Kas Meja Bakar)',
+    mutation_id CHAR(36) NOT NULL COMMENT 'Jejak silang ke cash_mutations',
+    settlement_id CHAR(36) NULL COMMENT 'Sesi tutup buku yang menyerap beban ini',
+    recorded_by CHAR(36) NULL COMMENT 'users.id pencatat',
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_expense_register FOREIGN KEY (register_id) REFERENCES cash_registers (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_expense_mutation FOREIGN KEY (mutation_id) REFERENCES cash_mutations (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_expense_settlement FOREIGN KEY (settlement_id) REFERENCES daily_settlements (id) ON DELETE SET NULL ON UPDATE CASCADE,
+    CONSTRAINT fk_expense_recorder FOREIGN KEY (recorded_by) REFERENCES users (id) ON DELETE SET NULL ON UPDATE CASCADE,
+    INDEX idx_expense_date (expense_date),
+    INDEX idx_expense_open (settlement_id, expense_date),
+    INDEX idx_expense_register (register_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 15. OFFICERS (akun buku hak mitra lapangan / aparat — Fase 10)
+-- =====================================================================
+-- 1 : 1 dengan akun login berperan `officer`. Baris ini adalah AKUN BUKU,
+-- bukan tabel kredensial: PIN tetap ber-pepper pada `users.password_hash`.
+--
+-- Aturan yang tidak boleh dilanggar:
+--   * `cut_pct` adalah persentase potongan dari **laba kotor** harian
+--     (pendapatan toko − modal belanja hulu), bukan nominal tetap.
+--   * `balance_payable` = Σ kredit (`cut` + `bonus`) − Σ debit (`disbursement`).
+--     Uangnya terparkir di laci sampai operator mencairkannya, karena tutup
+--     buku mengkredit pendapatan toko penuh (`total_cash = pendapatan`) dan
+--     hanya memindahkan laba bersih ke brankas.
+--   * Tidak ada kolom status: aktif/nonaktif milik `users.is_active`
+--     (satu sumber kebenaran, pola Fase 7).
+CREATE TABLE IF NOT EXISTS officers (
+    id CHAR(36) NOT NULL,
+    user_id CHAR(36) NOT NULL COMMENT 'Akun login petugas (1:1)',
+    cut_pct DECIMAL(5,2) NOT NULL DEFAULT 0.00 COMMENT 'Potongan dari laba kotor (%)',
+    balance_payable DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT 'Saldo hak yang belum dicairkan',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_officer_user (user_id),
+    KEY idx_officer_pct (cut_pct),
+    CONSTRAINT fk_officer_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 16. OFFICER_LEDGER_ENTRIES (buku hak mitra lapangan — Fase 10)
+-- =====================================================================
+-- `amount` SELALU positif; arah ditentukan `entry_type`:
+--   cut          kredit; akrual potongan sesi tutup buku
+--                (settlement_id, cut_pct, base_amount WAJIB terisi)
+--   bonus        kredit; suntikan operator. Selama `settlement_id` NULL entri
+--                ini BELUM mengurangi laba; tutup buku berikutnya menyerapnya
+--                (menandai settlement_id) tepat SATU kali — tanpa voucher
+--                operational_expenses, sehingga tidak ada deduksi ganda.
+--   disbursement debit; pencairan tunai (register_id + mutation_id terisi)
+--
+-- `settlement_id` memakai ON DELETE RESTRICT — BERBEDA dari
+-- `operational_expenses.settlement_id` (SET NULL): SET NULL akan mengaktifkan
+-- ulang bonus yang sudah terserap sehingga laba terpotong dua kali.
+CREATE TABLE IF NOT EXISTS officer_ledger_entries (
+    id CHAR(36) NOT NULL,
+    officer_id CHAR(36) NOT NULL,
+    entry_type ENUM('cut', 'bonus', 'disbursement') NOT NULL,
+    amount DECIMAL(14,2) NOT NULL COMMENT 'Selalu positif; arah ditentukan entry_type',
+    balance_after DECIMAL(14,2) NOT NULL COMMENT 'Saldo hak setelah entri ini',
+    cut_pct DECIMAL(5,2) NULL COMMENT 'Snapshot tarif saat akrual (cut saja)',
+    base_amount DECIMAL(14,2) NULL COMMENT 'Laba kotor basis potongan (cut saja; tidak pernah tampil di portal petugas)',
+    settlement_id CHAR(36) NULL COMMENT 'cut: sesi akrual; bonus: sesi penyerap; disbursement: NULL',
+    register_id CHAR(36) NULL COMMENT 'Pos kas pembayar (disbursement saja)',
+    mutation_id CHAR(36) NULL COMMENT 'Jejak silang ke cash_mutations (disbursement saja)',
+    recorded_by CHAR(36) NULL COMMENT 'users.id pencatat',
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_entry_mutation (mutation_id),
+    KEY idx_entry_officer (officer_id, created_at),
+    KEY idx_entry_open (entry_type, settlement_id),
+    KEY idx_entry_settlement (settlement_id, entry_type),
+    KEY idx_entry_register (register_id),
+    CONSTRAINT fk_entry_officer FOREIGN KEY (officer_id) REFERENCES officers (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_entry_settlement FOREIGN KEY (settlement_id) REFERENCES daily_settlements (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_entry_register FOREIGN KEY (register_id) REFERENCES cash_registers (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_entry_mutation FOREIGN KEY (mutation_id) REFERENCES cash_mutations (id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_entry_recorder FOREIGN KEY (recorded_by) REFERENCES users (id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- 17. DATA INISIALISASI DASAR (SEED DATA)
 -- =====================================================================
 
 INSERT INTO system_settings (setting_key, setting_value, description) VALUES
@@ -416,7 +543,8 @@ INSERT INTO system_settings (setting_key, setting_value, description) VALUES
 ('default_burn_fee_operator_cut', '10000.00', 'Porsi upah kas langsung pengelola dari jasa bakar'),
 ('notice_period_days', '7', 'Masa tunggu penarikan modal pokok investor (hari)'),
 ('active_carryover_deficit', '0.00', 'Akumulasi defisit hari minus yang belum pulih'),
-('daily_loan_limit', '500000.00', 'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)');
+('daily_loan_limit', '500000.00', 'Batas total pokok kasbon yang boleh dicairkan per hari (Rp)'),
+('officer_cut_total_cap_pct', '100.00', 'Batas atas jumlah persentase potongan seluruh mitra lapangan aktif (%)');
 
 INSERT INTO cash_registers (id, register_name, current_balance) VALUES
 (UUID(), 'Kas Meja Bakar', 0.00),
@@ -435,7 +563,7 @@ INSERT INTO cash_registers (id, register_name, current_balance) VALUES
    (`WHERE status = 'active' ORDER BY created_at ASC, id ASC`) — yang dijalankan **setiap** sesi
    tutup buku dan setiap render Layar B/C, sehingga tidak ada pembacaan penuh tabel.
 5. **Migrasi Aditif Peran Kasir (Fase 7):** penambahan nilai `'cashier'` pada `users.role`
-   dilakukan sebagai `ALTER TABLE users MODIFY COLUMN role ENUM('operator','investor','cashier') …`
+   dilakukan sebagai `ALTER TABLE users MODIFY COLUMN role ENUM('operator','investor','cashier','officer') …`
    — **hanya menambah di ujung daftar**, sehingga menjadi perubahan metadata *in-place* pada
    MySQL 8.0 maupun MariaDB (tanpa penyalinan tabel, tanpa penulisan ulang baris). Instalasi
    lapangan menjalankan `php database/migrate.php` yang **terjaga** (`INFORMATION_SCHEMA`) dan
@@ -454,3 +582,12 @@ INSERT INTO cash_registers (id, register_name, current_balance) VALUES
    memakai `ON DELETE RESTRICT` sehingga satu baris kas tidak dapat dihapus tanpa menghapus
    jejak piutangnya; `issued_by`/`recorded_by` memakai `ON DELETE SET NULL` karena akun staf
    boleh dihapus sementara riwayat kasbon wajib tetap terbaca.
+7. **Beban Operasional Non-Emas (Fase 9):** tabel **14** (`operational_expenses`) ditambahkan
+   sebagai **tabel baru** — **nol `ALTER`** pada tabel lama. Instalasi lapangan menjalankan
+   `php database/migrate.php` (migrasi **M3**, terjaga `INFORMATION_SCHEMA`, idempoten; DDL-nya
+   hidup di `OperationalExpense::ensureSchema()`). Dua indeks melayani dua jalur baca terpanas:
+   `idx_expense_open (settlement_id, expense_date)` untuk "voucher belum terserap, urut
+   `expense_date ASC, created_at ASC, id ASC`" yang dijalankan setiap render Layar C dan setiap
+   tutup buku, dan `idx_expense_date` untuk rekap harian/bulanan. `mutation_id` memakai
+   `ON DELETE RESTRICT` (satu baris kas tidak boleh dihapus tanpa jejak bebannya) sedangkan
+   `settlement_id` memakai `ON DELETE SET NULL` (beban tetap ada bila sesi dihapus).

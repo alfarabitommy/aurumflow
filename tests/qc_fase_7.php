@@ -248,17 +248,18 @@ $enumValues = User::roleEnumValues();
 
 Qc::equals(
     'A.1',
-    'users.role = [operator, investor, cashier] dengan urutan append-only',
-    ['operator', 'investor', 'cashier'],
+    'users.role = [operator, investor, cashier, officer] dengan urutan append-only',
+    ['operator', 'investor', 'cashier', 'officer'],
     $enumValues
 );
 
 Qc::ok(
     'A.2',
-    'Keputusan migrasi murni: ENUM dua nilai perlu diperluas, ENUM tiga nilai tidak',
+    'Keputusan migrasi murni: ENUM yang belum memuat seluruh peran resmi perlu diperluas',
     User::needsRoleEnumExtension("enum('operator','investor')") === true
-        && User::needsRoleEnumExtension("enum('operator','investor','cashier')") === false
-        && User::needsRoleEnumExtension("enum('investor','cashier','operator')") === false
+        && User::needsRoleEnumExtension("enum('operator','investor','cashier')") === true
+        && User::needsRoleEnumExtension("enum('operator','investor','cashier','officer')") === false
+        && User::needsRoleEnumExtension("enum('investor','cashier','operator','officer')") === false
         && User::needsRoleEnumExtension("enum('')") === true
 );
 
@@ -339,7 +340,7 @@ Qc::ok(
     'Daftar nilai ENUM identik di ERD, schema.sql, model, dan basis data',
     (static function () use ($enumValues): bool {
         $expected = User::ROLE_ENUM_VALUES;
-        $pattern = "/`?role`?\\s+ENUM\\(\\s*'operator',\\s*'investor',\\s*'cashier'\\s*\\)/i";
+        $pattern = "/`?role`?\\s+ENUM\\(\\s*'operator',\\s*'investor',\\s*'cashier',\\s*'officer'\\s*\\)/i";
 
         $erd = (string) file_get_contents(BASE_PATH . '/docs/AurumFlow Entity Relationship Diagram.md');
         $schema = (string) file_get_contents(BASE_PATH . '/database/schema.sql');
@@ -350,7 +351,7 @@ Qc::ok(
         return $enumValues === $expected
             && preg_match($pattern, $erd) === 1
             && preg_match($pattern, $schema) === 1
-            && str_contains($model, "ENUM('operator', 'investor', 'cashier')")
+            && str_contains($model, "ENUM('operator', 'investor', 'cashier', 'officer')")
             && str_contains($migrate, 'User::ensureRoleEnum()');
     })(),
     'empat sumber (ERD, schema.sql, DDL model, INFORMATION_SCHEMA) harus sepakat'
@@ -1590,9 +1591,9 @@ $tellerSource = (string) file_get_contents(APP_PATH . '/Controllers/TellerContro
 
 Qc::ok(
     'F.2',
-    'TellerController: satu daftar izin [operator, cashier] dipakai keempat titik guard',
+    'TellerController: satu daftar izin [operator, cashier] dipakai KEEMPAT titik guard (index, store, storeBridge, storeOpex)',
     str_contains($tellerSource, 'private const ALLOWED_ROLES = [Constants::ROLE_OPERATOR, Constants::ROLE_CASHIER];')
-        && substr_count($tellerSource, '$this->requireRole(...self::ALLOWED_ROLES);') === 3
+        && substr_count($tellerSource, '$this->requireRole(...self::ALLOWED_ROLES);') === 4
         && str_contains($tellerSource, 'requireRole(Constants::ROLE_OPERATOR)') === false,
     'allow-list tunggal'
 );
@@ -1804,10 +1805,10 @@ $agentsSource = (string) file_get_contents(BASE_PATH . '/AGENTS.md');
 
 Qc::ok(
     'F.7',
-    'Aset frontend satu versi: CACHE_NAME (kini v3, Fase 8) dan AGENTS.md sepakat',
-    str_contains($swSource, "var CACHE_NAME = 'aurumflow-shell-v3';")
-        && str_contains($agentsSource, 'aurumflow-shell-v3'),
-    'v2 → v3 karena app.js menerima komponen kasbonForm'
+    'Aset frontend satu versi: CACHE_NAME (kini v5, Fase 10) dan AGENTS.md sepakat',
+    str_contains($swSource, "var CACHE_NAME = 'aurumflow-shell-v5';")
+        && str_contains($agentsSource, 'aurumflow-shell-v5'),
+    'v3 → v4 karena app.js menerima state OPEX pada tellerForm/settlementForm'
 );
 
 $migrateSource = (string) file_get_contents(BASE_PATH . '/database/migrate.php');

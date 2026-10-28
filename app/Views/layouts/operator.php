@@ -73,6 +73,8 @@ if (!$isCashier) {
     $navItems[] = ['path' => App::url('operator/settlement'), 'label' => 'Rekonsiliasi', 'active' => false];
     $navItems[] = ['path' => App::url('operator/capital'), 'label' => 'Kelola Modal', 'active' => false];
     $navItems[] = ['path' => App::url('operator/kasir'), 'label' => 'Kelola Kasir', 'active' => false];
+    // Mitra Lapangan (Fase 10) — buku hak aparat/petugas; khusus operator.
+    $navItems[] = ['path' => App::url('operator/petugas'), 'label' => 'Mitra Lapangan', 'active' => false];
 }
 
 // Buku Kasbon (Fase 8) — permukaan yang menerima operator DAN kasir. Diletakkan

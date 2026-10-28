@@ -2216,6 +2216,11 @@ $expectedTables = [
     'miner_loan_ledger',
     'miner_loans',
     'miners',
+    // Fase 10 — buku hak mitra lapangan (tabel baru; tabel lama tidak berubah).
+    'officer_ledger_entries',
+    'officers',
+    // Fase 9 — beban operasional non-emas (tabel baru; tabel lama tidak berubah).
+    'operational_expenses',
     'profit_distributions',
     'system_settings',
     'users',
@@ -2230,7 +2235,7 @@ sort($tableNames);
 
 Qc::equals(
     'K.1',
-    'Skema 13 tabel ERD — Fase 6 `bridge_loans`, Fase 8 tiga tabel kasbon; tabel lama utuh',
+    'Skema 16 tabel ERD — Fase 6 `bridge_loans`, Fase 8 tiga tabel kasbon, Fase 9 `operational_expenses`, Fase 10 `officers` + `officer_ledger_entries`; tabel lama utuh',
     $expectedTables,
     $tableNames
 );

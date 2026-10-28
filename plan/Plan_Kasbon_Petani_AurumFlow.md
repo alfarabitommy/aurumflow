@@ -1,5 +1,14 @@
 # Plan Modul Kasbon Petani (*Miner Loan & Ledger*) — AurumFlow
 
+> **Status dokumen (pasca-Fase 9 — sinkronisasi dokumentasi).** Seluruh angka dan perilaku di
+> bawah ini — termasuk (bila ada) penyebutan **13 tabel** atau kurang, **14 suite / 853
+> assertion**, `CACHE_NAME` **v3**, dan isian **`coord_fee`** — adalah **potret fase tersebut**,
+> bukan keadaan sekarang. Keadaan terkini: **14 tabel** (termasuk `operational_expenses`, nol `ALTER`),
+> `CACHE_NAME` **`aurumflow-shell-v4`**, **15 suite / 900 assertion / 0 gagal**, beban operasional
+> dicatat sebagai **voucher kas** di meja kasir lalu diserap otomatis oleh tutup buku
+> (`total_cash = pendapatan`). Rujukan terkini: `plan/Summary_Fase_9_OPEX_AurumFlow.md`.
+
+
 > **Dokumen Perencanaan Eksekusi**
 > Proyek: **AurumFlow** — sistem manajemen operasional privat untuk perdagangan emas aluvial dengan settlement **T+1**.
 > Modul: **Kasbon / Piutang Petani** — permintaan Product Owner sebelum operasi lapangan.
@@ -521,7 +530,7 @@ Aturan: segmen kontak **dihilangkan seluruhnya** bila telepon & lokasi kosong; b
 |---|---|
 | `init()` | membaca **DOM** (bukan `$refs`): `formFieldValue(this,'miner_label')`, `formFieldValue(this,'amount')`, nilai radio metode lewat `formRadioValue()`; membangun `this.index` dari `this.$root.querySelectorAll('datalist option')` (`value → {id, outstandingCents}`) — **tidak ada** data petani yang disuntikkan sebagai JSON ke JS (nama adalah data pengguna, tetap di DOM hasil `Security::e()`) |
 | `pickMiner()` | `minerId = index[minerLabel]?.id ?? ''`; `outstandingCents` menyusul; pratinjau diperbarui (mode `repay`) |
-| `pickPercent(20|30)` | `amount = rupiahText(intdiv(outstandingCents × pct + 50, 100))` — **aritmetika sen integer**, half away from zero (cermin `KasbonService`) |
+| `pickPercent(20\|30)` | `amount = rupiahText(intdiv(outstandingCents × pct + 50, 100))` — **aritmetika sen integer**, half away from zero (cermin `KasbonService`) |
 | `payFull()` | `amount = rupiahText(outstandingCents)` |
 | `get afterLabel()` | `max(0, outstanding − amountCents)`; tanpa petani terpilih → `—` |
 | `rupiahText(cents)` | `'1.234.567'` / `'1.234.567,50'` — **hanya** pemisah ribuan titik + koma desimal, tepat seperti yang diterima `parseMoneyInput()` peladen |
@@ -634,7 +643,7 @@ Daftar terlarang untuk `KasbonController`, `KasbonService`, `Miner`/`MinerLoan`/
 | | G.3 | Tidak memuat `href` ke `/operator/settlement`, `/operator/capital`, `/operator/kasir`, `/dashboard` |
 | | G.4 | Tidak memuat label `Rekonsiliasi`/`Kelola Modal`/`Kelola Kasir` |
 | | G.5 | `SystemSetting::` pada berkas kasbon **hanya** baris `SETTING_DAILY_LIMIT` (pemindai baris) |
-| **H. Kontrak statis & keamanan** | H.1 | Tidak ada SQL di controller/view kasbon (pemindai `SELECT|INSERT INTO|UPDATE|DELETE FROM|ORDER BY|LIMIT`) |
+| **H. Kontrak statis & keamanan** | H.1 | Tidak ada SQL di controller/view kasbon (pemindai `SELECT\|INSERT INTO\|UPDATE\|DELETE FROM\|ORDER BY\|LIMIT`) |
 | | H.2 | Tidak ada interpolasi `$_GET/$_POST/$_REQUEST` ke string SQL (pemindai `qc_scan_lines`) |
 | | H.3 | Tidak ada `number_format(`, `FLOAT`, `DOUBLE` di jalur kasbon |
 | | H.4 | `Database::transaction(` tepat **2** di `KasbonService`; tidak ada `beginTransaction(` |
